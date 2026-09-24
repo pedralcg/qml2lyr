@@ -14,11 +14,13 @@ Se corre con el Python de QGIS (py3), NO con el py2.7 de ArcGIS:
 sinteticos de `tmp/regresion_qml/`, que fabrica con arcpy
 `run_regresion_qml.py`: correr ese primero una vez.
 
-Genera:
-- `tests/fixtures/qml/reglas_desmarcada_simbolo_raro.qml`: RuleRenderer con una
-  regla DESMARCADA cuyo simbolo (linea con MarkerLine) el emisor no soporta.
-- `tests/fixtures/batch_sintetico.qgz`: proyecto con capas que apuntan (en
-  ruta RELATIVA) a los datos sinteticos, para probar el modo batch sin `R:`.
+Sin argumentos regenera TODOS. Con nombres, solo esos:
+
+    ... generar_fixtures_qgis.py poligono_simple linea_dash_dot
+
+QGIS cambia UUID, fecha y algun color aleatorio en cada pasada: regenerar un
+fixture que no se queria tocar ensucia el diff. Nombres validos: las claves de
+`GENERADORES` (el nombre del fichero sin extension). `--listar` los muestra.
 """
 import os
 import sys
@@ -29,6 +31,7 @@ from qgis.core import (
     QgsPalettedRasterRenderer, QgsProject, QgsRasterLayer,
     QgsRendererCategory, QgsRuleBasedRenderer, QgsSimpleLineSymbolLayer,
     QgsVectorLayer)
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QColor
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,10 +49,94 @@ def _vectorial(nombre_fichero, nombre_capa, subset=None):
     return capa
 
 
-def _linea(color, estilo="solid"):
-    sl = QgsSimpleLineSymbolLayer(QColor(color), 0.6)
-    sl.setPenStyle({"solid": 1, "dash": 2}[estilo])
+def _linea(color, estilo="solid", ancho=0.6):
+    sl = QgsSimpleLineSymbolLayer(QColor(color), ancho)
+    sl.setPenStyle({"solid": Qt.SolidLine, "dash": Qt.DashLine,
+                    "dash dot": Qt.DashDotLine}[estilo])
     return QgsLineSymbol([sl])
+
+
+def _relleno(color, ancho_borde):
+    return QgsFillSymbol.createSimple(
+        {"color": color, "outline_color": "#000000",
+         "outline_width": str(ancho_borde), "style": "solid"})
+
+
+def qml_poligono_simple():
+    """Camino del PLUGIN, caso base: relleno solido sin opacidad de capa.
+    Sirve para probar la def-query y los textos con tilde, que NO viajan
+    dentro del .qml."""
+    capa = _vectorial("poligonos.shp", "Zonas")
+    capa.renderer().setSymbol(_relleno("#c81e1e", 0.5))
+    _guardar_qml(capa, "poligono_simple.qml")
+
+
+def qml_poligono_opacidad_50():
+    """Opacidad de CAPA al 50%: `<layerOpacity>` cuelga de la raiz <qgis>
+    igual que del <maplayer> de un .qgz. Hasta 2026-09-20 `parse_qml` no lo
+    leia y la transparencia se perdia entera por la via del plugin."""
+    capa = _vectorial("poligonos.shp", "Opaca a medias")
+    capa.renderer().setSymbol(_relleno("#1e78c8", 0.26))
+    capa.setOpacity(0.5)
+    _guardar_qml(capa, "poligono_opacidad_50.qml")
+
+
+def qml_linea_dash_dot():
+    """Trazo `dash dot`: QGIS escribe el estilo con ESPACIOS. Ancho 0,4 mm
+    (1,13 pt), por debajo del umbral en el que ArcMap dibuja el patron
+    continuo, para que el test mire el estilo y no el aviso."""
+    capa = _vectorial("lineas.shp", "Trazo dash dot")
+    capa.renderer().setSymbol(_linea("#0000ff", "dash dot", 0.4))
+    _guardar_qml(capa, "linea_dash_dot.qml")
+
+
+def qml_raster_paleta_alfa0():
+    """Raster paletado con una clase de ALFA 0, invisible en QGIS. Hasta
+    2026-09-20 salia OPACA y sin aviso; ArcMap la reproduce con simbolo nulo."""
+    capa = QgsRasterLayer(os.path.join(DIR_DATOS, "paleta.tif"), "Paleta")
+    if not capa.isValid():
+        sys.exit("raster no valido (corre antes run_regresion_qml.py)")
+    invisible = QColor("#ff0000")
+    invisible.setAlpha(0)
+    clases = [QgsPalettedRasterRenderer.Class(0, invisible, "cero (invisible)"),
+              QgsPalettedRasterRenderer.Class(1, QColor("#00ff00"), "uno"),
+              QgsPalettedRasterRenderer.Class(2, QColor("#0000ff"), "dos")]
+    capa.setRenderer(QgsPalettedRasterRenderer(capa.dataProvider(), 1, clases))
+    _guardar_qml(capa, "raster_paleta_alfa0.qml")
+
+
+def qml_punto_angulo_escalas():
+    """Marcador cuadrado rotado 45 grados + visibilidad por escala de la capa
+    (1:1000 acercado, 1:50000 alejado). OJO al probar el giro: un cuadrado a
+    45 se ve igual en los dos sentidos; el sentido lo prueban los glifos."""
+    capa = _vectorial("puntos.shp", "Hitos rotados")
+    capa.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+        {"name": "square", "color": "#0078c8", "size": "4",
+         "outline_color": "#000000", "outline_width": "0.4", "angle": "45"}))
+    capa.setScaleBasedVisibility(True)
+    capa.setMinimumScale(50000)
+    capa.setMaximumScale(1000)
+    _guardar_qml(capa, "punto_angulo_escalas.qml")
+
+
+def qml_reglas_con_desmarcada():
+    """RuleRenderer con una regla DESMARCADA: QGIS no la dibuja, asi que ni
+    sale su .lyr ni entra su filtro en el ELSE. El ELSE lleva ademas limites
+    de escala, que ArcMap no admite por clase y se ignoran con aviso."""
+    capa = _vectorial("lineas.shp", "Red hidrografica")
+    raiz = QgsRuleBasedRenderer.Rule(None)
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        _linea("#ff0000", ancho=1), 0, 0, "\"TIPO\" = 'rio'", "Rios"))
+    ramblas = QgsRuleBasedRenderer.Rule(
+        _linea("#0000ff", ancho=1), 0, 0, "\"TIPO\" = 'rambla'", "Ramblas")
+    ramblas.setActive(False)
+    raiz.appendChild(ramblas)
+    # Rule(simbolo, maximumScale, minimumScale, ...): 1:1000 es el limite
+    # acercado y 1:50000 el alejado.
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        _linea("#008000", ancho=1), 1000, 50000, "ELSE", "Resto"))
+    capa.setRenderer(QgsRuleBasedRenderer(raiz))
+    _guardar_qml(capa, "reglas_con_desmarcada.qml")
 
 
 def qml_regla_desmarcada_simbolo_raro():
@@ -208,19 +295,40 @@ def qgz_batch_sintetico():
     print("escrito", salida)
 
 
+# Nombre del fichero (sin extension) -> generador.
+GENERADORES = {
+    "poligono_simple": qml_poligono_simple,
+    "poligono_opacidad_50": qml_poligono_opacidad_50,
+    "linea_dash_dot": qml_linea_dash_dot,
+    "raster_paleta_alfa0": qml_raster_paleta_alfa0,
+    "punto_angulo_escalas": qml_punto_angulo_escalas,
+    "reglas_con_desmarcada": qml_reglas_con_desmarcada,
+    "reglas_desmarcada_simbolo_raro": qml_regla_desmarcada_simbolo_raro,
+    "puntos_triangulo_estrella": qml_marcadores_glifo,
+    "puntos_hexagono_equilatero": qml_hexagono_equilatero,
+    "categoria_oculta_no_soportada": qml_categoria_oculta_no_soportada,
+    "reglas_avisos_por_regla": qml_reglas_avisos_por_regla,
+    "batch_sintetico": qgz_batch_sintetico,
+}
+
+
 def main():
+    pedidos = sys.argv[1:]
+    if "--listar" in pedidos:
+        print("\n".join(sorted(GENERADORES)))
+        return
+    desconocidos = [p for p in pedidos if p not in GENERADORES]
+    if desconocidos:
+        sys.exit("fixture desconocido: %s (usa --listar)" % ", ".join(desconocidos))
+
     QgsApplication.setPrefixPath(os.environ.get("QGIS_PREFIX_PATH", ""), True)
     app = QgsApplication([], False)
     app.initQgis()
     try:
         print("QGIS", QgsApplication.version() if hasattr(
             QgsApplication, "version") else "")
-        qml_regla_desmarcada_simbolo_raro()
-        qml_marcadores_glifo()
-        qml_hexagono_equilatero()
-        qml_categoria_oculta_no_soportada()
-        qml_reglas_avisos_por_regla()
-        qgz_batch_sintetico()
+        for nombre in pedidos or list(GENERADORES):
+            GENERADORES[nombre]()
     finally:
         app.exitQgis()
 
