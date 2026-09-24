@@ -1,0 +1,30 @@
+# Release de qml2lyr: al empujar un tag vX.Y.Z (creado sobre main DESPUES del
+# merge, ver CLAUDE.md) se empaqueta el plugin y se adjunta el .zip al release.
+# El zip se instala en QGIS con "Instalar a partir de ZIP".
+#
+# El empaquetador exige que el tag case con `version=` de metadata.txt: un tag
+# sin subir antes la version publicaria un zip que dice ser otra version.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Empaquetar
+        id: zip
+        run: echo "ruta=$(python plugin/empaquetar.py --tag "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
+      - name: Publicar el release con el zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.zip.outputs.ruta }}" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
