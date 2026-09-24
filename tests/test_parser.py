@@ -127,6 +127,19 @@ def test_categoria_oculta_no_soportada(fallos):
            u"categorias emitidas")
 
 
+def test_avisos_por_regla(fallos):
+    """QGIS 3.44.12: el aviso del simbolo de una regla (la estrella por
+    glifo) va solo en el .lyr de esa regla, no en los de las demas."""
+    capas = dict((c.nombre, c) for c in _qml("reglas_avisos_por_regla.qml"))
+    _igual(fallos, sorted(capas), [u"Hitos", u"Resto"], u"reglas")
+    glifo = lambda c: any(u"ESRI Default Marker" in a for a in c.avisos)
+    if u"Resto" in capas and not glifo(capas[u"Resto"]):
+        fallos.append(u"'Resto' (estrella) deberia avisar del glifo")
+    if u"Hitos" in capas and glifo(capas[u"Hitos"]):
+        fallos.append(u"'Hitos' (circulo) hereda el aviso de la estrella: %r"
+                      % capas[u"Hitos"].avisos)
+
+
 def test_forma_sin_equivalente(fallos):
     """Una forma sin SimpleMarker ni glifo (arrow) se rechaza con mensaje."""
     import xml.etree.ElementTree as ET

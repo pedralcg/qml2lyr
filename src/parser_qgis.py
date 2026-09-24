@@ -1034,8 +1034,14 @@ def _capas_desde_reglas(rend_elem, nombre_base, avisos):
                 % (regla.get("label") or u"", u", ".join(escalas)))
 
     # Solo DESPUES de descartar las desmarcadas: sus simbolos no se tocan.
-    simbolos = _simbolos_por_nombre(
-        rend_elem, avisos, solo=set(r.get("symbol") for r in reglas))
+    # Cada simbolo con SU lista de avisos: cada regla es un .lyr aparte, y un
+    # aviso del simbolo de una regla aparecia tambien en las demas.
+    simbolos, avisos_simbolo = {}, {}
+    for nombre in set(r.get("symbol") for r in reglas):
+        propios = []
+        simbolos.update(_simbolos_por_nombre(rend_elem, propios,
+                                             solo=set([nombre])))
+        avisos_simbolo[nombre] = propios
 
     normales = [r for r in reglas if not _es_regla_else(r)]
     filtros_normales = [(r.get("filter") or u"").strip() for r in normales
@@ -1082,7 +1088,7 @@ def _capas_desde_reglas(rend_elem, nombre_base, avisos):
             defquery=defquery,
             # list(avisos): cada capa se lleva su COPIA. Compartir la lista
             # hacia que un aviso de una regla apareciese en las demas.
-            avisos=list(avisos)))
+            avisos=list(avisos) + avisos_simbolo.get(regla.get("symbol"), [])))
     if not capas:
         raise SimbologiaNoSoportada(
             u"RuleRenderer sin ninguna regla que emitir (todas desmarcadas o "
