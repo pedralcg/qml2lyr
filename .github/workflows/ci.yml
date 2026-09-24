@@ -33,5 +33,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compilar el plugin y el generador de fixtures
-        run: python -m compileall -q plugin/qml2lyr tests/generar_fixtures_qgis.py
+      - name: Compilar el plugin, el empaquetador y el generador de fixtures
+        run: python -m compileall -q plugin/qml2lyr plugin/empaquetar.py tests/generar_fixtures_qgis.py
+      # El mismo zip que publicaria un release: si el empaquetado se rompe, se
+      # sabe en el PR y no el dia del tag.
+      - name: Empaquetar el plugin
+        run: |
+          python plugin/empaquetar.py
+          python -c "import zipfile,glob; n=zipfile.ZipFile(glob.glob('dist/*.zip')[0]).namelist(); print('\n'.join(n)); assert 'qml2lyr/motor/emisor.py' in n and 'qml2lyr/metadata.txt' in n"

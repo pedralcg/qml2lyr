@@ -23,7 +23,8 @@ from qgis.core import QgsVectorLayer
 
 from .compat_qt import cursor_espera, nivel_mensaje, tipos_capa
 from .emisor_runner import ejecutar_qml, EmisorError
-from .settings_dialog import SettingsDialog, DEFAULT_PY27
+from . import rutas
+from .settings_dialog import SettingsDialog
 
 PLUGIN_DIR = os.path.dirname(__file__)
 MENU = u"qml2lyr"
@@ -138,14 +139,13 @@ class Qml2LyrPlugin(object):
         if isinstance(layer, QgsVectorLayer):
             defquery = layer.subsetString() or None
 
-        s = QSettings()
-        py27 = s.value("qml2lyr/python27", DEFAULT_PY27)
-        emisor = s.value("qml2lyr/emisor", "")
-        if not emisor or not os.path.isfile(emisor) or not py27 or not os.path.isfile(py27):
-            self._warn(u"Configura primero las rutas de Python 2.7 (ArcGIS) y de emisor.py.")
-            self.abrir_ajustes()
+        try:
+            py27, emisor = rutas.resolver()
+        except rutas.RutaNoValida as e:
+            self._error(u"qml2lyr no está listo", str(e))
             return
 
+        s = QSettings()
         nombre = layer.name()
         sugerido = self._nombre_fichero(nombre) + u".lyr"
         # En un .gpkg, dirname(ruta_dato) es el propio .gpkg y no una carpeta:

@@ -28,7 +28,26 @@ obligatorios: con un solo mantenedor nadie podría aprobar sus propios PR.
 4. `git push -u origin <rama>` y `gh pr create`. Merge desde GitHub cuando el CI
    esté en verde (squash), y borrar la rama.
 5. **Versiones**: la etiqueta (`vX.Y.Z`) se crea sobre `main` **después** del
-   merge, nunca en una rama. Subir antes `version=` en `plugin/qml2lyr/metadata.txt`.
+   merge, nunca en una rama. Subir antes `version=` en `plugin/qml2lyr/metadata.txt`
+   (por PR). Al empujar el tag, `release.yml` empaqueta con `plugin/empaquetar.py`
+   y adjunta `qml2lyr-X.Y.Z.zip` al release; **aborta si el tag no casa con
+   `version=`**.
+
+## Empaquetado: el motor va dentro del plugin
+
+El zip (y `deploy.ps1`) copian **todos los `src/*.py`** a `qml2lyr/motor/`: el
+usuario instala el zip y no configura nada. `plugin/qml2lyr/motor/` **no se
+versiona** (`.gitignore`): el código del motor vive solo en `src/`.
+
+`rutas.resolver()` decide qué ejecutar:
+- Python 2.7: ajuste `qml2lyr/python27` si está relleno; si no, el registro
+  `HKLM\SOFTWARE\WOW6432Node\ESRI\Python10.5\PythonDir` + `ArcGIS10.5\python.exe`,
+  y en último caso `C:\Python27\ArcGIS10.5\python.exe`.
+- Motor: ajuste `qml2lyr/emisor` si está relleno; si no, `motor/emisor.py`.
+- **Un ajuste relleno que no existe es un error**, no un permiso para caer a la
+  ruta automática. Vacío = automático.
+
+El CI empaqueta en cada PR y comprueba que el zip lleva `motor/emisor.py`.
 
 ## Entorno de ejecución
 

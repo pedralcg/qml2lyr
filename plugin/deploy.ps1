@@ -21,6 +21,13 @@ Copy-Item -Recurse -Force $origen $destino
 Get-ChildItem -Recurse -Force -Path $destino -Include "__pycache__", "*.pyc" |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-Write-Host "Plugin desplegado en: $destino"
+# El motor va dentro del plugin, como en el .zip del release (empaquetar.py):
+# todos los src\*.py a motor\. Asi el despliegue de desarrollo prueba lo mismo
+# que instala un usuario.
+$motor = Join-Path $destino "motor"
+New-Item -ItemType Directory -Force -Path $motor | Out-Null
+Copy-Item -Force -Path (Join-Path $PSScriptRoot "..\src\*.py") -Destination $motor
+
+Write-Host "Plugin desplegado en: $destino (motor incluido)"
 Write-Host "En QGIS: Complementos -> Administrar e instalar -> activa 'qml2lyr'."
 Write-Host "Si ya estaba cargado, usa 'Plugin Reloader' o reinicia QGIS."

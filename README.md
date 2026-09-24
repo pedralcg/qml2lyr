@@ -55,9 +55,11 @@ ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitac
 
 ## Instalación y uso
 
-Instrucciones del plugin en [`plugin/README.md`](plugin/README.md). En resumen:
-copiar `plugin/qml2lyr` al perfil de QGIS (`plugin/deploy.ps1`), activarlo y
-decirle en sus ajustes dónde están el Python 2.7 de ArcGIS y `src/emisor.py`.
+Descarga el `.zip` del último [release](https://github.com/pedralcg/qml2lyr/releases/latest)
+e instálalo en QGIS con **Complementos → Administrar e instalar complementos →
+Instalar a partir de ZIP**. No hay que configurar nada: el zip lleva el motor y
+el Python 2.7 de ArcGIS 10.5 se detecta solo. Detalles y la instalación desde el
+repositorio, en [`plugin/README.md`](plugin/README.md).
 
 El motor también se usa sin QGIS, desde la línea de comandos:
 

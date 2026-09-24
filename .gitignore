@@ -8,6 +8,10 @@ venv/
 out/
 tmp/
 
+# Empaquetado: el zip lo genera plugin/empaquetar.py y el motor se copia de src/
+dist/
+plugin/qml2lyr/motor/
+
 # Editor / SO
 .vscode/
 Thumbs.db

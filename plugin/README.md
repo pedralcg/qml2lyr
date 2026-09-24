@@ -30,22 +30,28 @@ funciona en equipos sin ArcGIS 10.5.
 
 ## Instalación
 
-1. Despliega al perfil de QGIS con el script de doble copia:
+1. Descarga `qml2lyr-X.Y.Z.zip` del último
+   [release](https://github.com/pedralcg/qml2lyr/releases/latest).
+2. En QGIS: **Complementos → Administrar e instalar complementos → Instalar a
+   partir de ZIP**, elige el `.zip` e instala. Es un complemento experimental:
+   si no aparece, marca «Mostrar también complementos experimentales» en
+   *Configuración*.
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File plugin\deploy.ps1 -Profile default
-   ```
+No hay nada más que configurar. El zip lleva el motor dentro y el Python 2.7 de
+ArcGIS 10.5 se detecta solo por el registro de Windows. **Complementos → qml2lyr
+→ ajustes…** solo hace falta si ArcGIS está en una ruta que no se detecta, o
+para usar otro `emisor.py`. Un campo vacío significa «automático».
 
-   (Edita siempre el código en `plugin\qml2lyr\` del repo y re-ejecuta el script;
-   nunca edites la copia del perfil.)
+### Desde el repositorio (desarrollo)
 
-2. En QGIS: **Complementos → Administrar e instalar complementos → Instalados**,
-   activa **qml2lyr**. Si aparece filtrado, marca «Mostrar también complementos
-   experimentales».
+```powershell
+powershell -ExecutionPolicy Bypass -File plugin\deploy.ps1 -Profile default
+```
 
-3. **Complementos → qml2lyr → ajustes…** y fija:
-   - Python 2.7 de ArcGIS: `C:\Python27\ArcGIS10.5\python.exe`
-   - `emisor.py`: la ruta a `src\emisor.py` de tu copia de este repositorio
+Copia `plugin\qml2lyr\` al perfil de QGIS y `src\*.py` a su `motor\`, igual que
+el zip. Edita siempre en el repo y vuelve a ejecutar el script; nunca edites la
+copia del perfil. Para empaquetar el zip a mano: `python plugin\empaquetar.py`
+(sale en `dist\`).
 
 ## Uso
 
@@ -71,13 +77,16 @@ Capas de memoria, PostGIS, WMS/WFS y otros contenedores multicapa (`.kml`,
 
 ```
 plugin/
-  deploy.ps1              ← copia al perfil de QGIS
+  deploy.ps1              ← copia al perfil de QGIS (plugin + motor)
+  empaquetar.py           ← genera dist/qml2lyr-X.Y.Z.zip (plugin + motor + LICENSE)
   qml2lyr/
     __init__.py           ← classFactory
     metadata.txt          ← metadatos del plugin
     qml2lyr_plugin.py     ← clase principal (acción, flujo, reportes)
     emisor_runner.py      ← puente subproceso py3 → py2.7 + parseo del JSON
-    settings_dialog.py    ← diálogo de rutas (QSettings)
+    rutas.py              ← Python de ArcGIS (registro) y motor incluido; ajustes como override
+    settings_dialog.py    ← diálogo de rutas opcionales (QSettings)
+    motor/                ← NO versionado: src/*.py, lo copian deploy.ps1 y empaquetar.py
     compat_qt.py          ← enums de Qt/QGIS con y sin scope (Qt5 / Qt6)
     icon.svg
 ```
