@@ -78,7 +78,7 @@ C:\Python27\ArcGIS10.5\python.exe run_regresion_qml.py     # cadena completa has
 
 `run_regresion_qml.py` se fabrica sus datos sintéticos con arcpy (en `tmp/`, fuera
 de git) y comprueba cada `.lyr` volcándolo con `src/lyr_dump.py`. Los fixtures
-nuevos los escribe QGIS de verdad (`tests/generar_fixtures_qgis.py`), no la mano:
+los escribe QGIS de verdad (`tests/generar_fixtures_qgis.py`), no la mano:
 un fixture escrito a mano solo prueba lo que *suponemos* que escribe QGIS.
 
 ## Estructura
