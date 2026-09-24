@@ -1,0 +1,14 @@
+# Python
+*.pyc
+__pycache__/
+venv/
+.venv/
+
+# Salidas de trabajo y datos sinteticos de los tests (se regeneran)
+out/
+tmp/
+
+# Editor / SO
+.vscode/
+Thumbs.db
+desktop.ini

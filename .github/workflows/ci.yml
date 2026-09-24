@@ -1,0 +1,37 @@
+# CI de qml2lyr.
+#
+# La cadena completa (.qml -> .lyr) necesita Windows con ArcGIS Desktop 10.5, que
+# no existe en un runner de GitHub: esa se prueba en local con run_regresion_qml.py.
+# Aqui corre la mitad que es Python puro: el parser del XML de QGIS (py2.7, como
+# el emisor) y la compilacion del plugin (py3, como QGIS).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  parser:
+    name: parser (py2.7)
+    # ubuntu-22.04 es la ultima imagen con el paquete python2 en apt.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Python 2.7
+        run: sudo apt-get update && sudo apt-get install -y python2
+      - name: Compilar el motor
+        run: python2 -m py_compile src/modelo.py src/parser_qgis.py src/emisor.py src/lyr_dump.py run_regresion_qml.py tests/test_parser.py
+      - name: Tests del parser
+        run: python2 tests/test_parser.py
+
+  plugin:
+    name: plugin (py3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compilar el plugin y el generador de fixtures
+        run: python -m compileall -q plugin/qml2lyr tests/generar_fixtures_qgis.py
