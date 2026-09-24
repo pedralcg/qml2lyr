@@ -126,6 +126,23 @@ def qml_categoria_oculta_no_soportada():
     _guardar_qml(capa, "categoria_oculta_no_soportada.qml")
 
 
+def qml_reglas_avisos_por_regla():
+    """Dos reglas: solo la de la estrella genera aviso (glifo). Ese aviso no
+    debe aparecer en el .lyr de la otra regla."""
+    capa = _vectorial("puntos.shp", "Puntos por reglas")
+    raiz = QgsRuleBasedRenderer.Rule(None)
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        QgsMarkerSymbol.createSimple({"name": "circle", "color": "#377eb8",
+                                      "size": "3", "outline_style": "no"}),
+        0, 0, "\"TIPO\" = 'hito'", "Hitos"))
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        QgsMarkerSymbol.createSimple({"name": "star", "color": "#e41a1c",
+                                      "size": "4", "outline_style": "no"}),
+        0, 0, "ELSE", "Resto"))
+    capa.setRenderer(QgsRuleBasedRenderer(raiz))
+    _guardar_qml(capa, "reglas_avisos_por_regla.qml")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -202,6 +219,7 @@ def main():
         qml_marcadores_glifo()
         qml_hexagono_equilatero()
         qml_categoria_oculta_no_soportada()
+        qml_reglas_avisos_por_regla()
         qgz_batch_sintetico()
     finally:
         app.exitQgis()
