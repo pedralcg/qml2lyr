@@ -260,11 +260,15 @@ RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
   modo posicional codifica los argumentos a la codepage ANSI a mano: es lo que
   Windows entrega a un py2.7 lanzado desde el py3 del plugin. El `stdout` se
   decodifica **en estricto** a propósito.
-- **Fixtures**: en `tests/fixtures/`. Los nuevos se generan con **QGIS de verdad**
+- **Fixtures**: en `tests/fixtures/`. **Todos** los escribe **QGIS de verdad**
   (`tests/generar_fixtures_qgis.py`, necesita antes los datos de
-  `run_regresion_qml.py`), y el docstring del caso dice quién lo escribió. Varios
-  `.qml` antiguos están escritos a mano: **si QGIS escribiera algo distinto a lo
-  que suponemos, esos casos pasarían igual sin probar nada.**
+  `run_regresion_qml.py`). Nunca escribir uno a mano: si QGIS escribiera algo
+  distinto a lo que suponemos, el caso pasaría igual sin probar nada (pasó: el
+  `reglas_con_desmarcada.qml` a mano tenía `scalemindenom`/`scalemaxdenom`
+  invertidos respecto a QGIS 3.44).
+- **Regenerar solo lo que se toca**: `generar_fixtures_qgis.py <nombre> ...`
+  (`--listar` da los nombres). QGIS cambia UUID, orden de atributos y colores
+  aleatorios en cada pasada: regenerarlos todos ensucia el diff.
 - `batch_sintetico.qgz` guarda rutas **relativas** a `tmp/regresion_qml/`: vale en
   cualquier clon del repo.
 - La regresión solo compara lo que `lyr_dump` vuelca. Al añadir una propiedad al

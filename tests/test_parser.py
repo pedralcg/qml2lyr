@@ -10,8 +10,8 @@ Python 2.7 (el parser usa literales `ur""`, igual que el emisor):
 
     python2 tests/test_parser.py
 
-Los fixtures los escribio QGIS 3.44.12 salvo los que se indican: los demas
-estan hechos a mano y solo prueban lo que suponemos que escribe QGIS.
+Todos los fixtures los escribio QGIS 3.44.12 (`tests/generar_fixtures_qgis.py`):
+uno hecho a mano solo probaria lo que suponemos que escribe QGIS.
 """
 import os
 import sys
@@ -43,7 +43,7 @@ def _cerca(fallos, obtenido, esperado, que, tol=1e-3):
 
 
 def test_regla_desmarcada(fallos):
-    """Hecho a mano: la regla con checkstate="0" no sale ni entra en el ELSE."""
+    """QGIS 3.44.12: la regla con checkstate="0" no sale ni entra en el ELSE."""
     capas = _qml("reglas_con_desmarcada.qml")
     _igual(fallos, [c.nombre for c in capas], [u"Rios", u"Resto"], u"reglas")
     _igual(fallos, capas[1].defquery,
@@ -58,7 +58,7 @@ def test_regla_desmarcada_simbolo_raro(fallos):
 
 
 def test_opacidad(fallos):
-    """Hecho a mano: <layerOpacity> se lee tambien por el camino .qml."""
+    """QGIS 3.44.12: <layerOpacity> se lee tambien por el camino .qml."""
     _igual(fallos, _qml("poligono_opacidad_50.qml")[0].opacidad, 0.5,
            u"opacidad de capa")
 

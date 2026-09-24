@@ -361,9 +361,8 @@ def caso_angulo_escalas(fallos):
     `angulo` y `escala_min/max` en los 14 golden del batch y en las salidas
     del camino .qml. Codigo nuevo sin una sola comparacion de punta a punta.
 
-    El .qml lo escribio QGIS 3.44.12 de verdad (`saveNamedStyle`), no esta
-    hecho a mano: los demas fixtures son sinteticos y por eso no prueban que
-    el formato real de QGIS se lea bien.
+    El .qml lo escribio QGIS 3.44.12 de verdad (`saveNamedStyle`), como todos
+    los fixtures desde el 2026-09-24.
     """
     lyr = _salida(u"angulo_escalas.lyr")
     args = _escribir_args("args_angulo.json", {
