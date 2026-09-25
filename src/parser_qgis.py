@@ -1164,6 +1164,45 @@ def ruta_dataset(ruta, layername=None, layerid=None):
     return ruta
 
 
+def _prefijo_ruta(texto):
+    """Prefijo de ruta normalizado: barras de Windows y sin separador final.
+    `Z:`, `Z:\\` y `Z:/` quedan igual (`Z:`)."""
+    return texto.strip().replace(u"/", u"\\").rstrip(u"\\")
+
+
+def parse_remap(texto):
+    """'Z:=L:\\Mi unidad\\Carto' -> (u'Z:', u'L:\\Mi unidad\\Carto').
+
+    Regla de `--remap`: el prefijo de la IZQUIERDA es el que escribe el
+    proyecto (y el que conserva el .lyr); el de la DERECHA, donde se lee el dato
+    en esta maquina. Se parte por el PRIMER `=`: una ruta de Windows no lo lleva
+    en la unidad, pero si podria llevarlo mas adentro."""
+    origen, sep, destino = texto.partition(u"=")
+    origen, destino = _prefijo_ruta(origen), _prefijo_ruta(destino)
+    if not sep or not origen or not destino:
+        raise ValueError(u"regla de --remap mal formada: %r (se espera "
+                         u"ORIGEN=DESTINO, p.ej. \"Z:=L:\\Mi unidad\\Carto\")"
+                         % texto)
+    return origen, destino
+
+
+def remapear(ruta, reglas):
+    """Aplica la primera regla cuyo ORIGEN es prefijo de `ruta`.
+
+    -> (ruta donde leer el dato, regla aplicada o None). El prefijo tiene que
+    acabar en un separador de la ruta: `C:\\datos` no casa con
+    `C:\\datos_viejos\\x.shp`. Sin distinguir mayusculas, como Windows."""
+    if not ruta:
+        return ruta, None
+    normal = ruta.replace(u"/", u"\\")
+    for origen, destino in reglas or ():
+        n = len(origen)
+        if normal[:n].lower() == origen.lower() and (
+                len(normal) == n or normal[n] == u"\\"):
+            return destino + normal[n:], (origen, destino)
+    return ruta, None
+
+
 #: Tokens del URI de OGR que sabemos leer o descartar a sabiendas. Cualquier
 #: otro se avisa en vez de tirarse en silencio.
 _TOKENS_DATASOURCE = (u"subset=", u"layername=", u"layerid=", u"geometrytype=")

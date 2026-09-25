@@ -591,6 +591,74 @@ def caso_batch_sintetico(fallos):
     _volcado(u"Zonas GPKG")
 
 
+# Batch con rutas absolutas a una unidad que no existe (`Q:`); QGIS lo escribio
+# con esa unidad montada por `subst` (tests/generar_fixtures_qgis.py).
+QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
+UNIDAD_REMAP = u"Q:"
+DIR_OUT_REMAP = os.path.join(DIR_OUT, "remap")
+
+
+def caso_batch_remap(fallos):
+    """(12) --remap: el dato se LEE en el destino y el .lyr queda apuntando a
+    la unidad original, que no existe, con un aviso que lo dice. Sin --remap,
+    las mismas capas fallan por dato no encontrado."""
+    import shutil
+    import arcpy
+    if os.path.exists(UNIDAD_REMAP + u"\\"):
+        fallos.append(u"la unidad %s existe en esta maquina: el caso necesita "
+                      u"que no exista" % UNIDAD_REMAP)
+        return
+    if os.path.isdir(DIR_OUT_REMAP):
+        shutil.rmtree(DIR_OUT_REMAP)
+
+    rc, out, err = _lanzar([u"--batch", QGZ_REMAP, DIR_OUT_REMAP + u"_sin"])
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, datos.get("resumen"), {u"ok": 0, u"error": 3, u"total": 3},
+           u"resumen sin --remap")
+
+    rc, out, err = _lanzar([u"--batch", QGZ_REMAP, DIR_OUT_REMAP,
+                            u"--remap", u"%s=%s" % (UNIDAD_REMAP, DIR_DATOS)])
+    _igual(fallos, rc, 0, u"codigo de salida")
+    datos = _json_estricto(out, fallos)
+    if datos is None:
+        fallos.append(u"stderr del emisor: %s"
+                      % err.decode("utf-8", "replace")[:400])
+        return
+    _igual(fallos, datos.get("resumen"), {u"ok": 3, u"error": 0, u"total": 3},
+           u"resumen con --remap")
+    esperados = {u"Zonas remap": u"Q:\\poligonos.shp",
+                 u"Paleta remap": u"Q:\\paleta.tif",
+                 u"GPKG remap": u"Q:\\zonas.gpkg\\main.zonas"}
+    for capa in datos.get("capas") or []:
+        nombre = capa.get("nombre")
+        if not capa.get("ok"):
+            fallos.append(u"'%s' no salio: %r" % (nombre, capa))
+            continue
+        fuente = arcpy.mapping.Layer(capa["salida"]).dataSource
+        _igual(fallos, fuente.lower(), esperados.get(nombre, u"").lower(),
+               u"dataSource del .lyr de '%s'" % nombre)
+        _igual(fallos, capa.get("dato"), fuente, u"'dato' del JSON de '%s'"
+               % nombre)
+        if not any(u"no existe en esta maquina" in a
+                   for a in capa.get("avisos") or []):
+            fallos.append(u"'%s' no avisa de la unidad inexistente: %r"
+                          % (nombre, capa.get("avisos")))
+        if nombre == u"Zonas remap":
+            rend = lyr_dump.dump_lyr(capa["salida"]).get("renderer") or {}
+            _igual(fallos, sorted(c.get("valor") for c in rend.get("clases", [])),
+                   [u"A", u"B"], u"el reapuntado conserva las clases")
+        if nombre == u"Paleta remap":
+            rend = lyr_dump.dump_lyr(capa["salida"]).get("renderer") or {}
+            _igual(fallos, sorted(c.get("label") for c in rend.get("clases", [])),
+                   [u"cero", u"dos", u"uno"],
+                   u"el reapuntado conserva la paleta")
+
+    rc, out, err = _lanzar([u"--remap", u"Q:=C:\\x", SHP_POLIGONOS,
+                            SHP_POLIGONOS, _salida(u"remap_no.lyr")])
+    if rc == 0:
+        fallos.append(u"--remap fuera de --batch deberia rechazarse")
+
+
 def caso_parser_sin_arcobjects(fallos):
     """(8) Lo que se puede comprobar sin ArcObjects: campos unicode, mensajes
     neutros y resolucion de rutas multicapa."""
@@ -672,6 +740,7 @@ CASOS = [
     ("categoria_oculta", caso_categoria_oculta),
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
     ("batch_sintetico", caso_batch_sintetico),
+    ("batch_remap", caso_batch_remap),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
 

@@ -709,6 +709,40 @@ def _existe_dataset(ruta):
         == u".gpkg" and os.path.exists(contenedor)
 
 
+def _reapuntar_lyr(ruta_lyr, regla):
+    """Devuelve el .lyr (leido por el DESTINO de una regla de --remap) a la
+    ruta ORIGINAL del proyecto, sin validar: la unidad original puede no
+    existir en esta maquina, que es justo el caso de uso.
+
+    -> (dataSource final leido de vuelta, avisos). Se relee el fichero: lo que
+    cuenta es lo que quedo guardado, no lo que se pidio."""
+    import arcpy
+    import parser_qgis
+    origen, destino = regla
+    avisos = []
+    lyr = arcpy.mapping.Layer(ruta_lyr)
+    ws = lyr.workspacePath
+    ws_original, aplicada = parser_qgis.remapear(ws, [(destino, origen)])
+    if aplicada is None:
+        raise RuntimeError(u"el espacio de trabajo del .lyr (%s) no empieza "
+                           u"por %s: no se puede reapuntar a %s"
+                           % (_u(ws), destino, origen))
+    lyr.findAndReplaceWorkspacePath(ws, ws_original, False)
+    lyr.save()
+    del lyr
+    final = _u(arcpy.mapping.Layer(ruta_lyr).dataSource)
+    if not final.lower().startswith(ws_original.lower()):
+        raise RuntimeError(u"el .lyr quedo apuntando a %s, no a %s"
+                           % (final, ws_original))
+    unidad = os.path.splitdrive(ws_original)[0]
+    if unidad and not unidad.startswith(u"\\\\") \
+            and not os.path.exists(unidad + u"\\"):
+        avisos.append(u"el .lyr apunta a %s y la unidad %s no existe en esta "
+                      u"maquina: ArcMap vera la capa rota hasta abrirla donde "
+                      u"%s exista" % (final, unidad, unidad))
+    return final, avisos
+
+
 def _emitir_capa_segura(capa, ruta_dato, ruta_salida, dir_tmp):
     """Emite UNA capa y devuelve su dict de resultado. NUNCA lanza: un fallo se
     reporta como ok=False (doctrina avisar-y-saltar)."""
@@ -791,11 +825,16 @@ def emitir_qml(ruta_qml, ruta_dato, ruta_lyr_salida, nombre=None, dir_tmp=None,
             "avisos": avisos_globales}
 
 
-def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None):
+def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None, remap=None):
     """Modo batch (secundario): un proyecto .qgz entero -> un .lyr por capa.
 
     Resuelve la ruta del dato de cada capa (relativa al .qgz). Una capa sin dato
-    o con simbologia no soportada se reporta ok=False y se salta; el batch sigue."""
+    o con simbologia no soportada se reporta ok=False y se salta; el batch sigue.
+
+    `remap`: reglas (origen, destino) de `parser_qgis.parse_remap`. Una capa
+    cuya ruta empieza por `origen` se LEE en `destino` y su .lyr se guarda
+    apuntando a la ruta ORIGINAL (caso: un proyecto con rutas `Z:` convertido
+    en una maquina donde esa unidad se llama de otra forma)."""
     import parser_qgis
     dir_tmp, propio = _dir_tmp_por_defecto(dir_tmp)
     avisos_globales = []
@@ -826,18 +865,35 @@ def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None):
             continue
         for capa in capas:
             ruta_dato = _resolver_datasource(capa.datasource, dir_proyecto)
-            if not ruta_dato or not _existe_dataset(ruta_dato):
+            ruta_lectura, regla = parser_qgis.remapear(ruta_dato, remap)
+            if not ruta_lectura or not _existe_dataset(ruta_lectura):
+                donde = capa.datasource
+                if regla:
+                    donde = u"%s (leido como %s por --remap)" % (
+                        capa.datasource, ruta_lectura)
                 resultados.append({"ok": False, "nombre": capa.nombre,
-                                   "error": u"dato no encontrado: %s"
-                                   % capa.datasource,
+                                   "error": u"dato no encontrado: %s" % donde,
                                    "tipo_error": "DatoNoEncontrado",
                                    "avisos": list(capa.avisos)})
                 continue
             etiqueta = _nombre_unico(
                 _nombre_fichero(capa.nombre or nombre_capa), usados)
             salida = os.path.join(dir_salida, etiqueta + u".lyr")
-            resultados.append(
-                _emitir_capa_segura(capa, ruta_dato, salida, dir_tmp))
+            resultado = _emitir_capa_segura(capa, ruta_lectura, salida, dir_tmp)
+            if regla and resultado["ok"]:
+                try:
+                    final, avisos = _reapuntar_lyr(salida, regla)
+                    resultado["dato"] = final
+                    resultado["avisos"].extend(avisos)
+                except Exception as e:
+                    # El .lyr existe pero apunta a la ruta de LECTURA, no a la
+                    # del proyecto: no es lo que se pidio, asi que no es ok.
+                    resultado.update({
+                        "ok": False, "tipo_error": "ReapunteFallido",
+                        "error": u"el .lyr se escribio leyendo %s pero no se "
+                                 u"pudo reapuntar a la ruta original: %s"
+                                 % (ruta_lectura, _texto_error(e))})
+            resultados.append(resultado)
     if propio:
         _limpiar_dir_tmp(dir_tmp, avisos_globales)
     ok = sum(1 for r in resultados if r["ok"])
@@ -908,9 +964,17 @@ def _main(argv):
                    help="nombre de la capa en el .lyr (modo .qml de una capa)")
     p.add_argument("--defquery", default=None,
                    help="definition query de la capa (modo .qml)")
+    p.add_argument("--remap", action="append", default=[],
+                   metavar="ORIGEN=DESTINO",
+                   help="modo --batch, repetible: lee en DESTINO lo que el "
+                        "proyecto tiene en ORIGEN y deja el .lyr apuntando a "
+                        "ORIGEN (p.ej. \"Z:=L:\Mi unidad\Carto\")")
     p.add_argument("posicionales", nargs="*",
                    help=".qml <dato> <salida.lyr>  |  --batch .qgz <dir_salida>")
     args = p.parse_args(argv)
+    if args.remap and not args.batch:
+        # En los modos .qml el llamador ya pasa la ruta del dato resuelta.
+        p.error("--remap solo vale en modo --batch")
 
     if args.args_json:
         if args.posicionales:
@@ -934,7 +998,13 @@ def _main(argv):
     if args.batch:
         if len(args.posicionales) != 2:
             p.error("modo --batch: <proyecto.qgz> <dir_salida>")
-        resultado = emitir_qgz(args.posicionales[0], args.posicionales[1])
+        import parser_qgis
+        try:
+            reglas = [parser_qgis.parse_remap(r) for r in args.remap]
+        except ValueError as e:
+            p.error(_texto_error(e).encode("utf-8"))
+        resultado = emitir_qgz(args.posicionales[0], args.posicionales[1],
+                               remap=reglas)
         _imprimir_json(resultado)
         return 0 if resultado.get("ok") else 2
 

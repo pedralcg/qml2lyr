@@ -96,8 +96,14 @@ contaminan). Tres modos:
   <salida.lyr> [--nombre N] [--defquery Q]` — el plugin genera el `.qml` de la
   capa viva con `saveNamedStyle`. `parse_qml` soporta vectorial y ráster. Un
   `.qml` rule-based da N `.lyr` (sufijo `_<etiqueta>`).
-- Batch: `emisor.py --batch <proyecto.qgz> <dir_salida>` — resuelve el datasource
-  de cada capa (relativo al `.qgz` o absoluto/red) y emite un `.lyr` por capa.
+- Batch: `emisor.py --batch <proyecto.qgz> <dir_salida> [--remap ORIGEN=DESTINO]...`
+  — resuelve el datasource de cada capa (relativo al `.qgz` o absoluto/red) y
+  emite un `.lyr` por capa. `--remap` (solo batch, repetible, primera regla que
+  casa, prefijo con frontera de separador) **lee** el dato en DESTINO y el `.lyr`
+  se reapunta a ORIGEN sin validar (`findAndReplaceWorkspacePath(..., False)`),
+  releyendo después el `dataSource`. Si el reapuntado falla, la capa sale
+  `ok=False`, `tipo_error: ReapunteFallido`. La clave `dato` del JSON es la ruta
+  final del `.lyr`; si su unidad no existe en la máquina, va un aviso.
 - JSON por capa: `ok`/`nombre`/`salida`/`avisos` o `error`/`tipo_error`, más una
   lista `avisos` de nivel superior para lo que no es de ninguna capa (p.ej. un
   temporal que no se pudo borrar). Una capa que falla se reporta `ok=False` y NO

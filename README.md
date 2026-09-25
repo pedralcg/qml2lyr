@@ -74,6 +74,17 @@ C:\Python27\ArcGIS10.5\python.exe src\emisor.py --batch <proyecto.qgz> <carpeta_
 El modo `--batch` convierte todas las capas de un proyecto. Una capa que falla
 se informa y se salta; el lote sigue.
 
+Si el proyecto apunta a una unidad que en esta máquina se llama de otra forma
+(`Z:` es `L:\Mi unidad\Carto`), `--remap` lee el dato donde está y deja el
+`.lyr` apuntando a la ruta del proyecto. Es repetible:
+
+```
+... --batch proyecto.qgz salida --remap "Z:=L:\Mi unidad\Carto"
+```
+
+Si la unidad original no existe aquí, el `.lyr` sale igual y la capa lleva un
+aviso: ArcMap la verá rota hasta abrirla donde esa unidad exista.
+
 ## Tests
 
 ```

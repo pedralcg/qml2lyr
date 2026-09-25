@@ -25,6 +25,7 @@ from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
 
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
+QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
 MM2PT = 2.834645669
 
 
@@ -199,6 +200,35 @@ def test_datasource_y_campos(fallos):
     ruta, defquery = parser_qgis._partir_datasource(
         u"C:\\x\\y.shp|subset=\"A\" = 'x|y'")
     _igual(fallos, defquery, u"\"A\" = 'x|y'", u"| dentro de un literal")
+
+
+def test_remap(fallos):
+    """Reglas de --remap: prefijo con frontera de separador y sin mayusculas."""
+    regla = parser_qgis.parse_remap(u"Z:=L:\\Mi unidad\\Carto\\")
+    _igual(fallos, regla, (u"Z:", u"L:\\Mi unidad\\Carto"), u"regla")
+    _igual(fallos, parser_qgis.parse_remap(u"z:/=L:/Carto"),
+           (u"z:", u"L:\\Carto"), u"regla con barras de QGIS")
+    _igual(fallos, parser_qgis.remapear(u"Z:\\LiDAR\\a.tif", [regla]),
+           (u"L:\\Mi unidad\\Carto\\LiDAR\\a.tif", regla), u"ruta remapeada")
+    _igual(fallos, parser_qgis.remapear(u"z:/LiDAR/a.tif", [regla])[0],
+           u"L:\\Mi unidad\\Carto\\LiDAR\\a.tif", u"minusculas y barras /")
+    otra = parser_qgis.parse_remap(u"C:\\datos=D:\\datos")
+    _igual(fallos, parser_qgis.remapear(u"C:\\datos_viejos\\x.shp", [otra]),
+           (u"C:\\datos_viejos\\x.shp", None), u"prefijo sin frontera")
+    _igual(fallos, parser_qgis.remapear(u"X:\\a.shp", [regla, otra]),
+           (u"X:\\a.shp", None), u"ninguna regla casa")
+    for mala in (u"Z:", u"=L:\\x", u"Z:="):
+        try:
+            parser_qgis.parse_remap(mala)
+            fallos.append(u"regla mal formada aceptada: %r" % mala)
+        except ValueError:
+            pass
+    capas = parser_qgis._raiz_qgs(QGZ_REMAP).iter("maplayer")
+    fuentes = sorted(parser_qgis.parse_maplayer(ml)[0].datasource
+                     for ml in capas)
+    _igual(fallos, fuentes, [u"Q:/paleta.tif", u"Q:/poligonos.shp",
+                             u"Q:/zonas.gpkg\\main.zonas"],
+           u"datasources del fixture de --remap")
 
 
 TESTS = [(n, f) for n, f in sorted(globals().items())

@@ -295,6 +295,59 @@ def qgz_batch_sintetico():
     print("escrito", salida)
 
 
+#: Unidad que el fixture de --remap tiene escrita y que NO debe existir al
+#: correr la regresion (el caso de uso: un proyecto con rutas `Z:` convertido
+#: donde esa unidad no esta montada). La regresion la importa de aqui.
+UNIDAD_REMAP = "Q:"
+
+
+def qgz_batch_remap():
+    """Proyecto con rutas ABSOLUTAS a una unidad que luego no existe.
+
+    Para que las rutas las escriba QGIS y no una sustitucion de texto, la
+    unidad se crea de verdad con `subst` sobre los datos sinteticos mientras
+    QGIS carga las capas y guarda, y se quita al terminar."""
+    import subprocess
+    if os.path.exists(UNIDAD_REMAP + "\\"):
+        sys.exit("la unidad %s ya existe: el fixture necesita una libre"
+                 % UNIDAD_REMAP)
+    subprocess.check_call(["subst", UNIDAD_REMAP, DIR_DATOS])
+    try:
+        proyecto = QgsProject.instance()
+        proyecto.clear()
+        zonas = QgsVectorLayer(UNIDAD_REMAP + "/poligonos.shp",
+                               "Zonas remap", "ogr")
+        cats = [QgsRendererCategory(v, QgsFillSymbol.createSimple(
+            {"color": c, "outline_color": "#000000"}), "Tipo %s" % v)
+            for v, c in (("A", "#e41a1c"), ("B", "#377eb8"))]
+        zonas.setRenderer(QgsCategorizedSymbolRenderer("TIPO", cats))
+        paleta = QgsRasterLayer(UNIDAD_REMAP + "/paleta.tif", "Paleta remap")
+        clases = [QgsPalettedRasterRenderer.Class(v, QColor(c), et)
+                  for v, c, et in ((0, "#ffffcc", "cero"), (1, "#41b6c4", "uno"),
+                                   (2, "#253494", "dos"))]
+        if paleta.isValid():
+            paleta.setRenderer(QgsPalettedRasterRenderer(
+                paleta.dataProvider(), 1, clases))
+        gpkg = QgsVectorLayer(UNIDAD_REMAP + "/zonas.gpkg|layername=zonas",
+                              "GPKG remap", "ogr")
+        for capa in (zonas, paleta, gpkg):
+            if not capa.isValid():
+                sys.exit("capa no valida en %s: %s (corre antes "
+                         "run_regresion_qml.py)" % (UNIDAD_REMAP, capa.name()))
+            proyecto.addMapLayer(capa)
+        proyecto.writeEntryBool("Paths", "/Absolute", True)
+        metadatos = proyecto.metadata()
+        metadatos.setAuthor("qml2lyr tests")
+        proyecto.setMetadata(metadatos)
+        salida = os.path.join(DIR_FIX, "batch_remap.qgz")
+        if not proyecto.write(salida):
+            sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+        proyecto.clear()
+        print("escrito", salida)
+    finally:
+        subprocess.call(["subst", UNIDAD_REMAP, "/D"])
+
+
 # Nombre del fichero (sin extension) -> generador.
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
@@ -309,6 +362,7 @@ GENERADORES = {
     "categoria_oculta_no_soportada": qml_categoria_oculta_no_soportada,
     "reglas_avisos_por_regla": qml_reglas_avisos_por_regla,
     "batch_sintetico": qgz_batch_sintetico,
+    "batch_remap": qgz_batch_remap,
 }
 
 
