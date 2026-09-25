@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """Empaqueta el plugin en un .zip instalable desde QGIS.
 
-    python plugin/empaquetar.py                 # -> dist/qml2lyr-<version>.zip
+    python plugin/empaquetar.py                 # -> dist/qml2lyr-qgis-plugin-<version>.zip
     python plugin/empaquetar.py --tag v0.1.0    # ademas exige tag == version
+
+El nombre NO puede ser `qml2lyr-<version>.zip`: es el que GitHub da al
+"Source code (zip)" de cada release (`<repo>-<tag sin v>`). Quien baja ese
+instala el arbol del repo y QGIS falla con `No module named 'qml2lyr-0'`.
 
 El .zip lleva la carpeta `qml2lyr/` con:
 - el codigo del plugin (`plugin/qml2lyr/`, sin caches ni un `motor/` local);
@@ -68,7 +72,7 @@ def empaquetar(tag=None):
         sys.exit("faltan en el motor: %s" % ", ".join(faltan))
 
     os.makedirs(DIR_DIST, exist_ok=True)
-    salida = os.path.join(DIR_DIST, "qml2lyr-%s.zip" % version)
+    salida = os.path.join(DIR_DIST, "qml2lyr-qgis-plugin-%s.zip" % version)
     with zipfile.ZipFile(salida, "w", zipfile.ZIP_DEFLATED) as z:
         for origen, arcname in entradas:
             # Separador "/" en el zip, sea cual sea el SO que empaqueta.

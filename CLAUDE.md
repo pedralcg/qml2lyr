@@ -30,7 +30,8 @@ obligatorios: con un solo mantenedor nadie podría aprobar sus propios PR.
 5. **Versiones**: la etiqueta (`vX.Y.Z`) se crea sobre `main` **después** del
    merge, nunca en una rama. Subir antes `version=` en `plugin/qml2lyr/metadata.txt`
    (por PR). Al empujar el tag, `release.yml` empaqueta con `plugin/empaquetar.py`
-   y adjunta `qml2lyr-X.Y.Z.zip` al release; **aborta si el tag no casa con
+   y adjunta `qml2lyr-qgis-plugin-X.Y.Z.zip` al release (nunca `qml2lyr-X.Y.Z.zip`:
+   se llama igual que el «Source code» de GitHub y el usuario baja el que no es); **aborta si el tag no casa con
    `version=`**.
 
 ## Empaquetado: el motor va dentro del plugin
