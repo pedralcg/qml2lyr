@@ -34,7 +34,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compilar el plugin, el empaquetador y el generador de fixtures
-        run: python -m compileall -q plugin/qml2lyr plugin/empaquetar.py tests/generar_fixtures_qgis.py
+        run: python -m compileall -q plugin/qml2lyr plugin/empaquetar.py tests/generar_fixtures_qgis.py tests/wms_local.py tests/test_plugin_informe.py
+      - name: Tests del informe del plugin (sin QGIS)
+        run: python tests/test_plugin_informe.py
       # El mismo zip que publicaria un release: si el empaquetado se rompe, se
       # sabe en el PR y no el dia del tag.
       - name: Empaquetar el plugin

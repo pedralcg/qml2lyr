@@ -87,10 +87,13 @@ un emisor `.lyrx` (ArcGIS Pro) en el futuro sin tocar el parser.
 de ArcGIS y lee **JSON por stdout** (los errores de arcpy van a stderr, no lo
 contaminan). Tres modos:
 - **Recomendado, y el que usa siempre el plugin**: `emisor.py --args-json
-  <args.json>` — fichero **UTF-8** con las claves `qml`, `dato`, `salida`
-  (obligatorias) y `nombre`, `defquery`, `dir_tmp` (opcionales). Una clave
-  desconocida se **rechaza** (una errata tipo `def_query` perdería la def-query
-  en silencio). Existe por el gotcha de `sys.argv` en cp1252 (ver abajo), y de
+  <args.json>` — fichero **UTF-8**. Clave `modo`: `"qml"` (por defecto: `qml`,
+  `salida` y `dato` **o** `servicio` —el `source()` de una capa WMS/WMTS viva—,
+  más `nombre`, `defquery`, `dir_tmp`) o `"mxd"` (`qgz`, `salida`, más
+  `plantilla`, `remap` como lista de `"ORIGEN=DESTINO"`, `dir_tmp`). Las claves se
+  validan por modo: una desconocida o de otro modo se **rechaza** (una errata
+  tipo `def_query` perdería la def-query en silencio), y `dato` + `servicio` a la
+  vez también. Existe por el gotcha de `sys.argv` en cp1252 (ver abajo), y de
   paso saca la def-query —llena de comillas— de la línea de comandos.
 - Posicional (clásico, retrocompatible): `emisor.py <estilo.qml> <ruta_dato>
   <salida.lyr> [--nombre N] [--defquery Q]` — el plugin genera el `.qml` de la

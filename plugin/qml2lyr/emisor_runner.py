@@ -13,10 +13,13 @@ import subprocess
 import tempfile
 
 
-# Tope de espera del subproceso. Un batch de un .qgz grande puede tardar, pero
-# arrancar ArcObjects + emitir una capa viva no debería pasar de unos segundos;
-# 5 min cubre el peor caso razonable sin dejar QGIS colgado para siempre.
+# Tope de espera del subproceso. Arrancar ArcObjects + emitir una capa viva no
+# deberia pasar de unos segundos; 5 min cubre el peor caso razonable sin dejar
+# QGIS colgado para siempre.
 TIMEOUT_S = 300
+# Un proyecto entero a .mxd convierte capa a capa y verifica reabriendo: el POM
+# de Majal Blanco (26 capas, WMS incluidos) tarda ~50 s. 30 min de techo.
+TIMEOUT_MXD_S = 1800
 
 
 class EmisorError(Exception):
@@ -51,7 +54,7 @@ def _entorno_limpio(python27):
     return env
 
 
-def _escribir_args_json(qml, ruta_dato, salida_lyr, nombre, defquery):
+def _escribir_args_json(args):
     """Vuelca los argumentos a un JSON UTF-8 temporal y devuelve su ruta.
 
     GOTCHA CRITICO (2026-09-20): el emisor corre en Python 2.7, que recibe
@@ -61,21 +64,47 @@ def _escribir_args_json(qml, ruta_dato, salida_lyr, nombre, defquery):
     1 sobre un fichero que si existia. Con el fichero de argumentos el texto
     viaja en UTF-8 y la def-query (llena de comillas) no pasa por el shell.
     """
-    args = {"qml": qml, "dato": ruta_dato, "salida": salida_lyr}
-    if nombre:
-        args["nombre"] = nombre
-    if defquery:
-        args["defquery"] = defquery
-    ruta = os.path.join(tempfile.gettempdir(),
-                        "qml2lyr_args_%d.json" % os.getpid())
+    # El nombre lleva el id del hilo: el modo MXD corre en una QgsTask y puede
+    # coincidir con una conversion de capa en el hilo principal.
+    import threading
+    ruta = os.path.join(tempfile.gettempdir(), "qml2lyr_args_%d_%d.json"
+                        % (os.getpid(), threading.get_ident()))
     with open(ruta, "w", encoding="utf-8") as f:
         json.dump(args, f, ensure_ascii=False)
     return ruta
 
 
 def ejecutar_qml(python27, emisor_py, qml, ruta_dato, salida_lyr, nombre=None,
-                 defquery=None):
-    """Lanza el emisor en modo .qml (una capa viva) y devuelve el dict del JSON.
+                 defquery=None, servicio=None):
+    """Una capa viva -> .lyr. `ruta_dato` para una capa de fichero, o
+    `servicio` (su `source()`) para una WMS/WMTS."""
+    args = {"qml": qml, "salida": salida_lyr}
+    if servicio:
+        args["servicio"] = servicio
+    else:
+        args["dato"] = ruta_dato
+    if nombre:
+        args["nombre"] = nombre
+    if defquery:
+        args["defquery"] = defquery
+    return ejecutar(python27, emisor_py, args, TIMEOUT_S)
+
+
+def ejecutar_mxd(python27, emisor_py, qgz, salida_mxd, plantilla=None,
+                 remap=None):
+    """El proyecto guardado en `qgz` -> un .mxd (modo --mxd del motor).
+    `remap`: lista de reglas "ORIGEN=DESTINO"."""
+    args = {"modo": "mxd", "qgz": qgz, "salida": salida_mxd}
+    if plantilla:
+        args["plantilla"] = plantilla
+    if remap:
+        args["remap"] = list(remap)
+    return ejecutar(python27, emisor_py, args, TIMEOUT_MXD_S)
+
+
+def ejecutar(python27, emisor_py, args, timeout):
+    """Lanza el emisor con `args` (un dict, ver `--args-json` del motor) y
+    devuelve el dict del JSON.
 
     Anade dos claves de diagnostico: `_returncode` y `_stderr`. Lanza
     EmisorError si el proceso no arranca o no devuelve JSON parseable.
@@ -92,8 +121,7 @@ def ejecutar_qml(python27, emisor_py, qml, ruta_dato, salida_lyr, nombre=None,
             u"Configuralo en «Complementos -> qml2lyr -> ajustes»." % emisor_py)
 
     try:
-        args_json = _escribir_args_json(qml, ruta_dato, salida_lyr, nombre,
-                                        defquery)
+        args_json = _escribir_args_json(args)
     except OSError as e:
         raise EmisorError(u"No se pudo escribir el fichero de argumentos:\n%s" % e)
     cmd = [python27, emisor_py, u"--args-json", args_json]
@@ -106,7 +134,7 @@ def ejecutar_qml(python27, emisor_py, qml, ruta_dato, salida_lyr, nombre=None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=_creationflags(),
-            timeout=TIMEOUT_S,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         # Sin timeout, un ArcObjects colgado (licencia, COM, dato bloqueado)
@@ -114,7 +142,7 @@ def ejecutar_qml(python27, emisor_py, qml, ruta_dato, salida_lyr, nombre=None,
         raise EmisorError(
             u"El emisor no respondió en %d s y se canceló.\n\n"
             u"Suele ser un problema de licencia de ArcGIS, del bloqueo COM o de "
-            u"un dato inaccesible. Revisa que ArcMap no tenga el dato abierto." % TIMEOUT_S)
+            u"un dato inaccesible. Revisa que ArcMap no tenga el dato abierto." % timeout)
     except Exception as e:  # OSError, etc.
         raise EmisorError(u"No se pudo lanzar el emisor:\n%s" % e)
     finally:

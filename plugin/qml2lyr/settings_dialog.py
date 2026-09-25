@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Dialogo de ajustes: rutas al Python 2.7 de ArcGIS y a emisor.py.
+"""Dialogo de ajustes: rutas al Python 2.7 de ArcGIS y a emisor.py, y las
+opciones del modo «Exportar proyecto a .mxd» (plantilla y reglas de remap).
 
 Las dos son OPCIONALES: vacias, el plugin detecta el Python de ArcGIS 10.5 por
 el registro y usa el motor que lleva dentro (ver `rutas.py`). Rellenarlas sirve
@@ -10,7 +11,7 @@ repositorio. Se guardan en QSettings (`qml2lyr/...`), nunca en el codigo.
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFileDialog, QDialogButtonBox,
+    QPushButton, QFileDialog, QDialogButtonBox, QPlainTextEdit, QMessageBox,
 )
 
 from . import rutas
@@ -47,6 +48,24 @@ class SettingsDialog(QDialog):
             u"Selecciona emisor.py", u"emisor.py (emisor.py)")
         lay.addLayout(fila2)
 
+        lay.addWidget(QLabel(u"Exportar proyecto a .mxd — plantilla:"))
+        self.ed_plantilla, fila3 = self._fila(
+            s.value("qml2lyr/plantilla", ""),
+            u"automático: ISO A3 horizontal de ArcGIS",
+            u"Selecciona la plantilla .mxd", u"ArcMap (*.mxd)")
+        lay.addLayout(fila3)
+
+        remap = QLabel(u"Exportar proyecto a .mxd — unidades que en esta "
+                       u"máquina se llaman de otra forma, una por línea "
+                       u"(ORIGEN=DESTINO). El dato se lee en DESTINO y el MXD "
+                       u"apunta a ORIGEN:")
+        remap.setWordWrap(True)
+        lay.addWidget(remap)
+        self.ed_remap = QPlainTextEdit(s.value("qml2lyr/remap", "") or "")
+        self.ed_remap.setPlaceholderText(u"Z:=L:\\Mi unidad\\Carto")
+        self.ed_remap.setFixedHeight(70)
+        lay.addWidget(self.ed_remap)
+
         bb = QDialogButtonBox(botones_ok_cancel())
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -71,7 +90,17 @@ class SettingsDialog(QDialog):
         return ed, row
 
     def accept(self):
+        malas = [linea for linea in self.ed_remap.toPlainText().splitlines()
+                 if linea.strip() and u"=" not in linea]
+        if malas:
+            QMessageBox.warning(
+                self, u"qml2lyr — ajustes",
+                u"Cada regla de remap es ORIGEN=DESTINO. Estas no:\n\n%s"
+                % u"\n".join(malas))
+            return
         s = QSettings()
         s.setValue("qml2lyr/python27", self.ed_py27.text().strip())
         s.setValue("qml2lyr/emisor", self.ed_emisor.text().strip())
+        s.setValue("qml2lyr/plantilla", self.ed_plantilla.text().strip())
+        s.setValue("qml2lyr/remap", self.ed_remap.toPlainText().strip())
         QDialog.accept(self)
