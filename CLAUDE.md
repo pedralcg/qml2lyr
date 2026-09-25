@@ -104,6 +104,21 @@ contaminan). Tres modos:
   releyendo después el `dataSource`. Si el reapuntado falla, la capa sale
   `ok=False`, `tipo_error: ReapunteFallido`. La clave `dato` del JSON es la ruta
   final del `.lyr`; si su unidad no existe en la máquina, va un aviso.
+- **MXD**: `emisor.py --mxd <proyecto.qgz> <salida.mxd> [--plantilla X.mxd]
+  [--remap ...]` → `emitir_mxd`. Corre el batch a `<salida>_lyr/` (cada
+  resultado lleva `id`, el id de la capa en QGIS, que lo casa con el árbol
+  `layer-tree-group`) y monta el árbol con arcpy: grupos desde un `.lyr` de
+  `GroupLayer` vacío, `AddLayer`/`AddLayerToGroup` en `BOTTOM`, visibilidad de
+  `checked`, SRC de `projectCrs` y extensión de `<mapcanvas>` (o de
+  `ProjectViewSettings/DefaultViewExtent`). Lo que no convierte va a
+  `omitidas` con su motivo; un grupo que se queda vacío, también; un ráster
+  `multibandcolor` entra con `MakeRasterLayer` y aviso. `relativePaths` +
+  `saveACopy`, y **verifica reabriendo**: capas y grupos (sin bajar dentro de
+  un servicio), rutas relativas y fuentes rotas; una rota que apunta a un
+  origen de `--remap` o a una unidad inexistente es esperada, cualquier otra da
+  `ok=False`, `tipo_error: VerificacionFallida`, exit 2. Si el `.mxd` existe:
+  `SalidaExiste`. **`mxd.title` de arcpy no se guarda** (ni con `saveACopy` ni
+  con `save`): el título del proyecto no se traslada.
 - JSON por capa: `ok`/`nombre`/`salida`/`avisos` o `error`/`tipo_error`, más una
   lista `avisos` de nivel superior para lo que no es de ninguna capa (p.ej. un
   temporal que no se pudo borrar). Una capa que falla se reporta `ok=False` y NO

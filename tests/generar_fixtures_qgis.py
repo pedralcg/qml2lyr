@@ -538,6 +538,74 @@ def qgz_batch_wms():
         servidor.shutdown()
 
 
+def qgz_proyecto_mxd():
+    """Proyecto para el modo --mxd: grupos anidados, capas apagadas, una capa
+    que no convierte (flecha), un grupo que se queda vacio y un raster RGB.
+
+        x Zonas por tipo
+        x Grupo A
+            - Solo rios
+            - Sub B
+                x Paleta
+        x Hitos flecha          <- no convierte: se omite
+        x Solo fallos           <- su unica capa no convierte: grupo omitido
+            x Hitos flecha 2
+        - RGB                   <- raster RGB: entra con el render por defecto
+    """
+    from qgis.core import QgsCoordinateReferenceSystem, QgsReferencedRectangle
+    from qgis.core import QgsRectangle
+    proyecto = QgsProject.instance()
+    proyecto.clear()
+    proyecto.setCrs(QgsCoordinateReferenceSystem("EPSG:25830"))
+    proyecto.setTitle("Proyecto de prueba del modo MXD")
+
+    zonas = _vectorial("poligonos.shp", "Zonas por tipo")
+    zonas.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _relleno("#e41a1c", 0.26), "Tipo A"),
+        QgsRendererCategory("B", _relleno("#377eb8", 0.26), "Tipo B")]))
+    rios = _vectorial("lineas.shp", "Solo rios", subset="\"TIPO\" = 'rio'")
+    rios.renderer().setSymbol(_linea("#0000ff"))
+    paleta = QgsRasterLayer(os.path.join(DIR_DATOS, "paleta.tif"), "Paleta")
+    paleta.setRenderer(QgsPalettedRasterRenderer(paleta.dataProvider(), 1, [
+        QgsPalettedRasterRenderer.Class(v, QColor(c), et) for v, c, et in
+        ((0, "#ffffcc", "cero"), (1, "#41b6c4", "uno"), (2, "#253494", "dos"))]))
+    flechas = []
+    for nombre in ("Hitos flecha", "Hitos flecha 2"):
+        hitos = _vectorial("puntos.shp", nombre)
+        hitos.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+            {"name": "arrow", "color": "#ff7f00", "size": "3"}))
+        flechas.append(hitos)
+    rgb = QgsRasterLayer(os.path.join(DIR_DATOS, "rgb.tif"), "RGB")
+    for capa in [zonas, rios, paleta, rgb] + flechas:
+        if not capa.isValid():
+            sys.exit("capa no valida: %s (corre antes run_regresion_qml.py)"
+                     % capa.name())
+        proyecto.addMapLayer(capa, False)
+
+    raiz = proyecto.layerTreeRoot()
+    raiz.addLayer(zonas)
+    grupo_a = raiz.addGroup("Grupo A")
+    grupo_a.addLayer(rios).setItemVisibilityChecked(False)
+    sub_b = grupo_a.addGroup("Sub B")
+    sub_b.setItemVisibilityChecked(False)
+    sub_b.addLayer(paleta)
+    raiz.addLayer(flechas[0])
+    raiz.addGroup("Solo fallos").addLayer(flechas[1])
+    raiz.addLayer(rgb).setItemVisibilityChecked(False)
+
+    proyecto.viewSettings().setDefaultViewExtent(QgsReferencedRectangle(
+        QgsRectangle(599900, 4199900, 600500, 4200300), proyecto.crs()))
+    proyecto.writeEntryBool("Paths", "/Absolute", False)
+    metadatos = proyecto.metadata()
+    metadatos.setAuthor("qml2lyr tests")
+    proyecto.setMetadata(metadatos)
+    salida = os.path.join(DIR_FIX, "proyecto_mxd.qgz")
+    if not proyecto.write(salida):
+        sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+    proyecto.clear()
+    print("escrito", salida)
+
+
 # Nombre del fichero (sin extension) -> generador.
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
@@ -561,6 +629,7 @@ GENERADORES = {
     "batch_sintetico": qgz_batch_sintetico,
     "batch_remap": qgz_batch_remap,
     "batch_wms": qgz_batch_wms,
+    "proyecto_mxd": qgz_proyecto_mxd,
 }
 
 

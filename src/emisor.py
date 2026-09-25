@@ -1076,6 +1076,59 @@ def emitir_qml(ruta_qml, ruta_dato, ruta_lyr_salida, nombre=None, dir_tmp=None,
             "avisos": avisos_globales}
 
 
+def _resultados_maplayer(ml, dir_proyecto, dir_salida, dir_tmp, remap,
+                         usados):
+    """Un <maplayer> del proyecto -> lista de resultados (uno por .lyr; un
+    rule-based da varios). Nunca lanza: los fallos van como ok=False."""
+    import parser_qgis
+    nombre_capa = ml.findtext("layername") or u"sin_nombre"
+    try:
+        capas = parser_qgis.parse_maplayer(ml)
+    except SimbologiaNoSoportada as e:
+        return [{"ok": False, "nombre": nombre_capa, "error": _texto_error(e),
+                 "tipo_error": "SimbologiaNoSoportada", "avisos": []}]
+    except Exception as e:
+        return [{"ok": False, "nombre": nombre_capa, "error": _texto_error(e),
+                 "tipo_error": type(e).__name__, "avisos": []}]
+    resultados = []
+    for capa in capas:
+        etiqueta = _nombre_unico(
+            _nombre_fichero(capa.nombre or nombre_capa), usados)
+        salida = os.path.join(dir_salida, etiqueta + u".lyr")
+        if capa.servicio is not None:
+            resultados.append(_emitir_capa_segura(capa, None, salida, dir_tmp))
+            continue
+        ruta_dato = _resolver_datasource(capa.datasource, dir_proyecto)
+        ruta_lectura, regla = parser_qgis.remapear(ruta_dato, remap)
+        if not ruta_lectura or not _existe_dataset(ruta_lectura):
+            usados.discard(etiqueta)
+            donde = capa.datasource
+            if regla:
+                donde = u"%s (leido como %s por --remap)" % (
+                    capa.datasource, ruta_lectura)
+            resultados.append({"ok": False, "nombre": capa.nombre,
+                               "error": u"dato no encontrado: %s" % donde,
+                               "tipo_error": "DatoNoEncontrado",
+                               "avisos": list(capa.avisos)})
+            continue
+        resultado = _emitir_capa_segura(capa, ruta_lectura, salida, dir_tmp)
+        if regla and resultado["ok"]:
+            try:
+                final, avisos = _reapuntar_lyr(salida, regla)
+                resultado["dato"] = final
+                resultado["avisos"].extend(avisos)
+            except Exception as e:
+                # El .lyr existe pero apunta a la ruta de LECTURA, no a la del
+                # proyecto: no es lo que se pidio, asi que no es ok.
+                resultado.update({
+                    "ok": False, "tipo_error": "ReapunteFallido",
+                    "error": u"el .lyr se escribio leyendo %s pero no se "
+                             u"pudo reapuntar a la ruta original: %s"
+                             % (ruta_lectura, _texto_error(e))})
+        resultados.append(resultado)
+    return resultados
+
+
 def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None, remap=None):
     """Modo batch (secundario): un proyecto .qgz entero -> un .lyr por capa.
 
@@ -1101,56 +1154,11 @@ def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None, remap=None):
     resultados = []
     usados = set()
     for ml in raiz.iter("maplayer"):
-        nombre_capa = ml.findtext("layername") or u"sin_nombre"
-        try:
-            capas = parser_qgis.parse_maplayer(ml)
-        except SimbologiaNoSoportada as e:
-            resultados.append({"ok": False, "nombre": nombre_capa,
-                               "error": _texto_error(e),
-                               "tipo_error": "SimbologiaNoSoportada", "avisos": []})
-            continue
-        except Exception as e:
-            resultados.append({"ok": False, "nombre": nombre_capa,
-                               "error": _texto_error(e),
-                               "tipo_error": type(e).__name__, "avisos": []})
-            continue
-        for capa in capas:
-            if capa.servicio is not None:
-                etiqueta = _nombre_unico(
-                    _nombre_fichero(capa.nombre or nombre_capa), usados)
-                resultados.append(_emitir_capa_segura(
-                    capa, None, os.path.join(dir_salida, etiqueta + u".lyr"),
-                    dir_tmp))
-                continue
-            ruta_dato = _resolver_datasource(capa.datasource, dir_proyecto)
-            ruta_lectura, regla = parser_qgis.remapear(ruta_dato, remap)
-            if not ruta_lectura or not _existe_dataset(ruta_lectura):
-                donde = capa.datasource
-                if regla:
-                    donde = u"%s (leido como %s por --remap)" % (
-                        capa.datasource, ruta_lectura)
-                resultados.append({"ok": False, "nombre": capa.nombre,
-                                   "error": u"dato no encontrado: %s" % donde,
-                                   "tipo_error": "DatoNoEncontrado",
-                                   "avisos": list(capa.avisos)})
-                continue
-            etiqueta = _nombre_unico(
-                _nombre_fichero(capa.nombre or nombre_capa), usados)
-            salida = os.path.join(dir_salida, etiqueta + u".lyr")
-            resultado = _emitir_capa_segura(capa, ruta_lectura, salida, dir_tmp)
-            if regla and resultado["ok"]:
-                try:
-                    final, avisos = _reapuntar_lyr(salida, regla)
-                    resultado["dato"] = final
-                    resultado["avisos"].extend(avisos)
-                except Exception as e:
-                    # El .lyr existe pero apunta a la ruta de LECTURA, no a la
-                    # del proyecto: no es lo que se pidio, asi que no es ok.
-                    resultado.update({
-                        "ok": False, "tipo_error": "ReapunteFallido",
-                        "error": u"el .lyr se escribio leyendo %s pero no se "
-                                 u"pudo reapuntar a la ruta original: %s"
-                                 % (ruta_lectura, _texto_error(e))})
+        for resultado in _resultados_maplayer(ml, dir_proyecto, dir_salida,
+                                              dir_tmp, remap, usados):
+            # El id de QGIS casa cada resultado con el arbol de capas (modo
+            # --mxd); una capa por reglas da varios resultados con el mismo id.
+            resultado["id"] = ml.findtext("id")
             resultados.append(resultado)
     if propio:
         _limpiar_dir_tmp(dir_tmp, avisos_globales)
@@ -1159,6 +1167,322 @@ def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None, remap=None):
             "resumen": {"ok": ok, "error": len(resultados) - ok,
                         "total": len(resultados)},
             "capas": resultados, "avisos": avisos_globales}
+
+
+# ---------------------------------------------------------------------------
+# Modo --mxd: el .qgz entero a un .mxd (arbol, orden, visibilidad).
+#
+# Receta probada a mano en Majal Blanco (2026-09-25, montar_mxd.py): arcpy no
+# crea documentos en blanco, se parte de una plantilla de ArcGIS; los grupos se
+# anaden desde un .lyr de GroupLayer vacio; rutas relativas + saveACopy directo
+# al destino, y se verifica REABRIENDO (una ruta relativa larga se pierde sin
+# error al guardar).
+# ---------------------------------------------------------------------------
+
+_PLANTILLA_MXD = (u"MapTemplates\\Standard Page Sizes\\ISO (A) Page Sizes"
+                  u"\\ISO A3 Landscape.mxd")
+
+
+def _plantilla_por_defecto():
+    key = _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
+                          r"SOFTWARE\Wow6432Node\ESRI\Desktop10.5")
+    return os.path.join(_u(_winreg.QueryValueEx(key, "InstallDir")[0]),
+                        _PLANTILLA_MXD)
+
+
+def _arbol_qgs(raiz):
+    """<layer-tree-group> raiz del .qgs -> lista de nodos, de ARRIBA a ABAJO
+    como el panel de capas de QGIS (y la tabla de contenidos de ArcMap):
+    {"grupo", "visible", "hijos"} o {"id", "nombre", "visible"}."""
+    def recorrer(nodo):
+        salida = []
+        for hijo in nodo:
+            visible = hijo.get("checked") == "Qt::Checked"
+            if hijo.tag == "layer-tree-group":
+                salida.append({"grupo": hijo.get("name") or u"", "visible":
+                               visible, "hijos": recorrer(hijo)})
+            elif hijo.tag == "layer-tree-layer":
+                salida.append({"id": hijo.get("id"), "nombre": hijo.get("name"),
+                               "visible": visible})
+        return salida
+    arbol = raiz.find("layer-tree-group")
+    return recorrer(arbol) if arbol is not None else []
+
+
+def _srs_proyecto(raiz):
+    """-> (arcpy.SpatialReference o None, texto del SRC)."""
+    import arcpy
+    srs = raiz.find("projectCrs/spatialrefsys")
+    if srs is None:
+        return None, None
+    authid = srs.findtext("authid") or u""
+    if authid.upper().startswith(u"EPSG:"):
+        try:
+            return arcpy.SpatialReference(int(authid.split(u":")[1])), authid
+        except Exception:
+            pass
+    return None, authid or srs.findtext("description")
+
+
+def _extension_proyecto(raiz):
+    """Extension del lienzo al guardar (<mapcanvas>, proyectos guardados desde
+    la interfaz) o, si no hay, la vista por defecto del proyecto."""
+    claves = ("xmin", "ymin", "xmax", "ymax")
+    try:
+        ext = raiz.find("mapcanvas/extent")
+        if ext is not None:
+            return [float(ext.findtext(k)) for k in claves]
+        ext = raiz.find("ProjectViewSettings/DefaultViewExtent")
+        if ext is not None:
+            return [float(ext.get(k)) for k in claves]
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _lyr_grupo_vacio(dir_tmp):
+    """.lyr de un GroupLayer vacio: arcpy no crea grupos."""
+    _, CA = _mods()
+    ruta = os.path.join(dir_tmp, u"grupo_vacio.lyr")
+    if not os.path.exists(ruta):
+        grupo = _nobj(CA.GroupLayer, CA.ILayer)
+        grupo.Name = u"grupo"
+        fichero = _nobj(CA.LayerFile, CA.ILayerFile)
+        fichero.New(ruta)
+        fichero.ReplaceContents(grupo)
+        fichero.Save()
+        fichero.Close()
+    return ruta
+
+
+def _raster_rgb(ml):
+    """El <maplayer> es un raster RGB (multibandcolor)?"""
+    rr = ml.find("pipe/rasterrenderer")
+    return rr is not None and rr.get("type") == "multibandcolor"
+
+
+def _es_rota_esperada(capa_arcpy, remap):
+    """Rota a proposito: apunta a un ORIGEN de --remap (la ruta tal como la
+    escribe el proyecto, que en esta maquina puede no existir) o a una unidad
+    que aqui no esta montada."""
+    import parser_qgis
+    try:
+        fuente = capa_arcpy.dataSource
+    except Exception:
+        return False
+    if parser_qgis.remapear(fuente, remap)[1] is not None:
+        return True
+    unidad = os.path.splitdrive(fuente)[0]
+    return bool(unidad) and not unidad.startswith(u"\\\\") and \
+        not os.path.exists(unidad + u"\\")
+
+
+def _capas_del_documento(mxd):
+    """Capas y grupos PROPIOS del documento, sin bajar dentro de una capa de
+    servicio (un WMS aparece en ListLayers con todas sus subcapas)."""
+    import arcpy
+    servicios, propias = [], []
+    for capa in arcpy.mapping.ListLayers(mxd):
+        nombre = capa.longName
+        if any(nombre.startswith(s + u"\\") for s in servicios):
+            continue
+        es_servicio = capa.supports("SERVICEPROPERTIES") or \
+            getattr(capa, "isServiceLayer", False)
+        if es_servicio:
+            servicios.append(nombre)
+        propias.append((capa, capa.isGroupLayer and not es_servicio))
+    return propias
+
+
+def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None):
+    """Modo --mxd: un proyecto .qgz -> un .mxd con el mismo arbol de capas.
+
+    Convierte cada capa como el batch (los .lyr quedan en `<mxd>_lyr/`) y los
+    monta en el orden, los grupos y la visibilidad del panel de capas de QGIS,
+    con el SRC y la extension del proyecto. Lo que no convierte se OMITE y se
+    lista con su motivo; un raster RGB entra con el render por defecto de
+    ArcMap, avisando. No sobrescribe un .mxd existente."""
+    import arcpy
+    import parser_qgis
+    resultado = {"ok": False, "modo": "mxd", "entrada": ruta_qgz,
+                 "salida": ruta_mxd, "capas": [], "omitidas": [], "avisos": []}
+    avisos, omitidas = resultado["avisos"], resultado["omitidas"]
+    if os.path.exists(ruta_mxd):
+        resultado.update({"error": u"%s ya existe: el modo --mxd no "
+                                   u"sobrescribe" % ruta_mxd,
+                          "tipo_error": "SalidaExiste"})
+        return resultado
+    try:
+        raiz = parser_qgis._raiz_qgs(ruta_qgz)
+    except Exception as e:
+        resultado.update({"error": _texto_error(e),
+                          "tipo_error": type(e).__name__})
+        return resultado
+    plantilla = plantilla or _plantilla_por_defecto()
+    dir_lyr = os.path.splitext(ruta_mxd)[0] + u"_lyr"
+    resultado["dir_lyr"] = dir_lyr
+    dir_tmp, propio = _dir_tmp_por_defecto(dir_tmp)
+    if not os.path.isdir(dir_tmp):
+        os.makedirs(dir_tmp)
+
+    lote = emitir_qgz(ruta_qgz, dir_lyr, dir_tmp=dir_tmp, remap=remap)
+    resultado["capas"] = lote.get("capas") or []
+    avisos.extend(lote.get("avisos") or [])
+    por_id = {}
+    for r in resultado["capas"]:
+        por_id.setdefault(r.get("id"), []).append(r)
+    maplayers = dict((ml.findtext("id"), ml) for ml in raiz.iter("maplayer"))
+    dir_proyecto = os.path.dirname(os.path.abspath(ruta_qgz))
+
+    mxd = arcpy.mapping.MapDocument(plantilla)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    previas = arcpy.mapping.ListLayers(mxd, "", df)
+    if previas:
+        avisos.append(u"la plantilla ya traia %d capas: se conservan debajo"
+                      % len(previas))
+    srs, texto_srs = _srs_proyecto(raiz)
+    if srs is not None:
+        df.spatialReference = srs
+    elif texto_srs:
+        avisos.append(u"SRC del proyecto (%s) sin codigo EPSG: el marco de "
+                      u"datos toma el de la primera capa" % texto_srs)
+    if raiz.find("layer-tree-group/custom-order") is not None and \
+            raiz.find("layer-tree-group/custom-order").get("enabled") == "1":
+        avisos.append(u"el proyecto usa un orden de dibujado propio: el MXD "
+                      u"dibuja en el orden del arbol de capas")
+    grupo_vacio = _lyr_grupo_vacio(dir_tmp)
+    puestas = {"capas": 0, "grupos": 0}
+
+    def capas_arcpy(nodo):
+        """Capa del arbol -> lista de capas de arcpy (vacia si se omite)."""
+        convertidas = [r for r in por_id.get(nodo["id"], []) if r["ok"]]
+        salida = []
+        for r in convertidas:
+            capa = arcpy.mapping.Layer(r["salida"])
+            capa.name = r.get("nombre") or nodo["nombre"]
+            salida.append(capa)
+            r["en_mxd"] = True
+        if salida:
+            return salida
+        ml = maplayers.get(nodo["id"])
+        fallos = por_id.get(nodo["id"], [])
+        if ml is not None and _raster_rgb(ml):
+            ruta, _ = parser_qgis._partir_datasource(ml.findtext("datasource"))
+            ruta = _resolver_datasource(ruta, dir_proyecto)
+            lectura, regla = parser_qgis.remapear(ruta, remap)
+            if lectura and os.path.exists(lectura):
+                capa = arcpy.MakeRasterLayer_management(
+                    lectura, u"rgb_%d" % len(avisos)).getOutput(0)
+                if regla:
+                    capa.findAndReplaceWorkspacePath(
+                        capa.workspacePath,
+                        parser_qgis.remapear(capa.workspacePath,
+                                             [(regla[1], regla[0])])[0], False)
+                capa.name = nodo["nombre"]
+                avisos.append(u"'%s': raster RGB con el render por defecto de "
+                              u"ArcMap (la simbologia de QGIS no se traslada)"
+                              % nodo["nombre"])
+                return [capa]
+        motivo = u"; ".join(r.get("error") or u"" for r in fallos) or \
+            u"capa sin resultado de conversion"
+        omitidas.append({"nombre": nodo["nombre"], "motivo": motivo})
+        return []
+
+    def poner(nodos, grupo):
+        for nodo in nodos:
+            if "grupo" in nodo:
+                # Se crea solo si algo de dentro entra: un grupo vacio en el MXD
+                # parece una capa convertida sin nada.
+                g = arcpy.mapping.Layer(grupo_vacio)
+                g.name = nodo["grupo"]
+                g.visible = nodo["visible"]
+                _anadir(g, grupo)
+                nuevo = _ultimo_grupo(nodo["grupo"], grupo)
+                antes = puestas["capas"]
+                poner(nodo["hijos"], nuevo)
+                if puestas["capas"] == antes:
+                    arcpy.mapping.RemoveLayer(df, nuevo)
+                    omitidas.append({"nombre": u"[grupo] %s" % nodo["grupo"],
+                                     "motivo": u"todas sus capas se omitieron"})
+                else:
+                    puestas["grupos"] += 1
+                continue
+            for capa in capas_arcpy(nodo):
+                capa.visible = nodo["visible"]
+                _anadir(capa, grupo)
+                puestas["capas"] += 1
+
+    def _anadir(capa, grupo):
+        if grupo is None:
+            arcpy.mapping.AddLayer(df, capa, "BOTTOM")
+        else:
+            arcpy.mapping.AddLayerToGroup(df, grupo, capa, "BOTTOM")
+
+    def _ultimo_grupo(nombre, grupo):
+        # Con "BOTTOM" el grupo recien anadido (vacio) es el ultimo de la
+        # lista en el orden de la tabla de contenidos.
+        todas = arcpy.mapping.ListLayers(grupo if grupo is not None else mxd,
+                                         "", None if grupo is not None else df)
+        return [c for c in todas if c.isGroupLayer and c.name == nombre][-1]
+
+    try:
+        poner(_arbol_qgs(raiz), None)
+        extension = _extension_proyecto(raiz)
+        if extension:
+            df.extent = arcpy.Extent(*extension)
+        mxd.relativePaths = True
+        salida_dir = os.path.dirname(os.path.abspath(ruta_mxd))
+        if not os.path.isdir(salida_dir):
+            os.makedirs(salida_dir)
+        mxd.saveACopy(ruta_mxd)
+    except Exception as e:
+        resultado.update({"error": u"montando el MXD: %s" % _texto_error(e),
+                          "tipo_error": type(e).__name__})
+        return resultado
+    finally:
+        mxd = None  # suelta el documento (py2: no se puede `del` aqui)
+        if propio:
+            _limpiar_dir_tmp(dir_tmp, avisos)
+
+    # Verificacion REABRIENDO lo guardado: lo que cuenta es el fichero.
+    m2 = arcpy.mapping.MapDocument(ruta_mxd)
+    propias = _capas_del_documento(m2)
+    rotas = arcpy.mapping.ListBrokenDataSources(m2)
+    inesperadas = [c.longName for c in rotas
+                   if not _es_rota_esperada(c, remap)]
+    n_previas = len(previas)
+    verificacion = {
+        "capas": len([c for c, grupo in propias if not grupo]),
+        "grupos": len([c for c, grupo in propias if grupo]),
+        "rutas_relativas": bool(m2.relativePaths),
+        "rotas": [c.longName for c in rotas],
+        "rotas_inesperadas": inesperadas,
+        "arbol": [(u"x " if c.visible else u"- ") + c.longName
+                  for c, _ in propias]}
+    if n_previas:
+        verificacion["capas_de_la_plantilla"] = n_previas
+    del m2
+    resultado["verificacion"] = verificacion
+    previas_capas = len([c for c in previas if not c.isGroupLayer])
+    previas_grupos = n_previas - previas_capas
+    esperado = {"capas": puestas["capas"] + previas_capas,
+                "grupos": puestas["grupos"] + previas_grupos}
+    fallos = []
+    if (verificacion["capas"], verificacion["grupos"]) != \
+            (esperado["capas"], esperado["grupos"]):
+        fallos.append(u"al reabrir hay %d capas y %d grupos; se pusieron %d y %d"
+                      % (verificacion["capas"], verificacion["grupos"],
+                         esperado["capas"], esperado["grupos"]))
+    if not verificacion["rutas_relativas"]:
+        fallos.append(u"el MXD reabierto no guarda rutas relativas")
+    if inesperadas:
+        fallos.append(u"fuentes rotas al reabrir: %s" % u", ".join(inesperadas))
+    if fallos:
+        resultado.update({"error": u"; ".join(fallos),
+                          "tipo_error": "VerificacionFallida"})
+        return resultado
+    resultado["ok"] = True
+    return resultado
 
 
 def _imprimir_json(obj):
@@ -1214,6 +1538,11 @@ def _main(argv):
         description="Emite .lyr de ArcMap desde estilo QGIS (contrato F4).")
     p.add_argument("--batch", action="store_true",
                    help="modo batch: entrada=.qgz, salida=directorio")
+    p.add_argument("--mxd", action="store_true",
+                   help="modo MXD: entrada=.qgz, salida=.mxd (no sobrescribe)")
+    p.add_argument("--plantilla", default=None,
+                   help="modo --mxd: .mxd de partida (por defecto, ISO A3 "
+                        "horizontal de ArcGIS)")
     p.add_argument("--args-json", dest="args_json", default=None,
                    help="fichero JSON utf-8 con qml/dato/salida/nombre/"
                         "defquery/dir_tmp (modo recomendado: evita la "
@@ -1230,9 +1559,24 @@ def _main(argv):
     p.add_argument("posicionales", nargs="*",
                    help=".qml <dato> <salida.lyr>  |  --batch .qgz <dir_salida>")
     args = p.parse_args(argv)
-    if args.remap and not args.batch:
+    if args.remap and not (args.batch or args.mxd):
         # En los modos .qml el llamador ya pasa la ruta del dato resuelta.
-        p.error("--remap solo vale en modo --batch")
+        p.error("--remap solo vale en los modos --batch y --mxd")
+    if args.plantilla and not args.mxd:
+        p.error("--plantilla solo vale en modo --mxd")
+
+    if args.mxd:
+        if len(args.posicionales) != 2:
+            p.error("modo --mxd: <proyecto.qgz> <salida.mxd>")
+        import parser_qgis
+        try:
+            reglas = [parser_qgis.parse_remap(r) for r in args.remap]
+        except ValueError as e:
+            p.error(_texto_error(e).encode("utf-8"))
+        resultado = emitir_mxd(args.posicionales[0], args.posicionales[1],
+                               plantilla=args.plantilla, remap=reglas)
+        _imprimir_json(resultado)
+        return 0 if resultado.get("ok") else 2
 
     if args.args_json:
         if args.posicionales:

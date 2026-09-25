@@ -86,6 +86,20 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   soporta un `|` **dentro** del SQL (un literal `'x|y'`, el concatenador `||`):
   antes se partía por todos los `|` y la def-query se **truncaba en silencio**.
 
+## 2 bis. Modo `--mxd` (proyecto entero)
+
+- Lo que no convierte se **omite** del `.mxd` y se lista en `omitidas` con su
+  motivo (p. ej. un generador de geometría); un grupo cuyas capas se omiten
+  todas, también. No se mete con una simbología por defecto que aparente
+  estar convertida.
+- **Excepción**: un ráster **RGB** (`multibandcolor`) entra con el render RGB
+  por defecto de ArcMap, avisando: la simbología de QGIS (bandas, estirado) no
+  se traslada.
+- No viajan: el **título** del proyecto (arcpy no lo guarda), el **orden de
+  dibujado propio** (se dibuja en el orden del árbol, y se avisa), los temas de
+  mapa, los marcadores ni las composiciones.
+- Si la plantilla ya trae capas, se conservan debajo (y se avisa).
+
 ## 3. Degradaciones que ArcMap 10.5 no puede representar (se avisan)
 
 ArcMap tiene menos expresividad que QGIS en varios puntos. El motor emite el

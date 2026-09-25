@@ -46,6 +46,7 @@ FILAS_NULOS = [(u"1", u"Forestal MUP"), (u"1", u""), (u"1", None),
 GDB_NULOS = os.path.join(DIR_DATOS, "nulos.gdb")
 FC_NULOS = os.path.join(GDB_NULOS, "cuadros")
 SHP_NULOS = os.path.join(DIR_DATOS, "cuadros_nulos.shp")
+RASTER_RGB = os.path.join(DIR_DATOS, "rgb.tif")
 # Raster flotante SIN estadisticas: el caso de la pendiente de Majal Blanco.
 RASTER_CORTES = os.path.join(DIR_DATOS, "cortes.tif")
 # Sidecar que escribe GDAL (estadisticas aproximadas, SIN histograma), como el
@@ -125,6 +126,22 @@ def _preparar_datos():
         for sidecar in (RASTER_CORTES + ".aux.xml", RASTER_CORTES + ".xml"):
             if os.path.exists(sidecar):
                 os.remove(sidecar)
+
+    if not arcpy.Exists(RASTER_RGB):
+        # Raster de 3 bandas (el caso de las ortos RGB en el modo --mxd).
+        import numpy
+        bandas = []
+        for i in range(3):
+            arr = numpy.array([[0, 128, 255], [64, 192, 32], [255, 0, 128]],
+                              dtype="uint8")
+            banda = os.path.join(DIR_DATOS, "rgb_b%d.tif" % i)
+            arcpy.NumPyArrayToRaster(numpy.roll(arr, i), arcpy.Point(
+                600000, 4200000), 10, 10).save(banda)
+            bandas.append(banda)
+        arcpy.CompositeBands_management(u";".join(bandas), RASTER_RGB)
+        arcpy.DefineProjection_management(RASTER_RGB, sr)
+        for banda in bandas:
+            arcpy.Delete_management(banda)
 
     for ws, nombre, ruta in ((GDB_NULOS, "cuadros", FC_NULOS),
                              (DIR_DATOS, "cuadros_nulos.shp", SHP_NULOS)):
@@ -1006,6 +1023,62 @@ def _caso_batch_wms(fallos, salida, wms_local):
         fallos.append(u"no avisa de la subcapa que falta: %r" % avisos)
 
 
+QGZ_MXD = os.path.join(RAIZ, "tests", "fixtures", "proyecto_mxd.qgz")
+
+
+def caso_modo_mxd(fallos):
+    """(18) --mxd: el .qgz entero a un .mxd con el mismo arbol (grupos
+    anidados, orden, visibilidad), SRC y extension; lo que no convierte
+    se omite y se lista, el grupo que se queda vacio tambien, y el RGB entra
+    con aviso. No sobrescribe."""
+    import shutil
+    import arcpy
+    carpeta = os.path.join(DIR_OUT, "mxd")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    mxd = os.path.join(carpeta, u"proyecto.mxd")
+    rc, out, err = _lanzar([u"--mxd", QGZ_MXD, mxd])
+    datos = _json_estricto(out, fallos)
+    if not datos or not datos.get("ok"):
+        fallos.append(u"el modo --mxd fallo: %r / %s"
+                      % (datos, err.decode("utf-8", "replace")[:400]))
+        return
+    _igual(fallos, rc, 0, u"codigo de salida")
+    _igual(fallos, datos["verificacion"]["arbol"], [
+        u"x Zonas por tipo", u"x Grupo A", u"- Grupo A\\Solo rios",
+        u"- Grupo A\\Sub B", u"x Grupo A\\Sub B\\Paleta", u"- RGB"],
+        u"arbol del MXD reabierto")
+    _igual(fallos, sorted(o["nombre"] for o in datos["omitidas"]),
+           [u"Hitos flecha", u"Hitos flecha 2", u"[grupo] Solo fallos"],
+           u"omitidas")
+    if not any(u"'RGB'" in a for a in datos["avisos"]):
+        fallos.append(u"sin aviso del RGB: %r" % datos["avisos"])
+    _igual(fallos, datos["verificacion"]["rutas_relativas"], True,
+           u"rutas relativas")
+    _igual(fallos, datos["verificacion"]["rotas"], [], u"fuentes rotas")
+    if not os.path.isdir(datos.get("dir_lyr") or u""):
+        fallos.append(u"no esta la carpeta de .lyr: %r" % datos.get("dir_lyr"))
+    doc = arcpy.mapping.MapDocument(mxd)
+    df = arcpy.mapping.ListDataFrames(doc)[0]
+    _igual(fallos, df.spatialReference.factoryCode, 25830, u"SRC del marco")
+    e = df.extent
+    # ArcMap ajusta la extension a la proporcion del marco: debe CONTENER la
+    # del proyecto y estar centrada en ella.
+    if not (e.XMin <= 599900 + 1 and e.XMax >= 600500 - 1 and
+            e.YMin <= 4199900 + 1 and e.YMax >= 4200300 - 1) or \
+            abs((e.XMin + e.XMax) / 2 - 600200) > 1:
+        fallos.append(u"extension del marco: %s" % e)
+    paleta = [c for c in arcpy.mapping.ListLayers(doc) if c.name == u"Paleta"]
+    if not paleta or not paleta[0].visible:
+        fallos.append(u"'Paleta' deberia estar encendida dentro de 'Sub B'")
+    del doc
+
+    rc, out, err = _lanzar([u"--mxd", QGZ_MXD, mxd])
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, (rc, datos.get("tipo_error")), (2, u"SalidaExiste"),
+           u"no sobrescribe un .mxd existente")
+
+
 def caso_parser_sin_arcobjects(fallos):
     """(8) Lo que se puede comprobar sin ArcObjects: campos unicode, mensajes
     neutros y resolucion de rutas multicapa."""
@@ -1093,6 +1166,7 @@ CASOS = [
     ("batch_sintetico", caso_batch_sintetico),
     ("batch_remap", caso_batch_remap),
     ("batch_wms", caso_batch_wms),
+    ("modo_mxd", caso_modo_mxd),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
 

@@ -71,12 +71,22 @@ El motor también se usa sin QGIS, desde la línea de comandos:
 ```
 C:\Python27\ArcGIS10.5\python.exe src\emisor.py <estilo.qml> <dato> <salida.lyr> [--defquery "..."]
 C:\Python27\ArcGIS10.5\python.exe src\emisor.py --batch <proyecto.qgz> <carpeta_salida>
+C:\Python27\ArcGIS10.5\python.exe src\emisor.py --mxd <proyecto.qgz> <salida.mxd> [--plantilla <x.mxd>]
 ```
+
+El modo `--mxd` monta el proyecto entero en un `.mxd`: las mismas capas, en el
+mismo orden, con los mismos grupos y la misma visibilidad que el panel de capas
+de QGIS, con el SRC y la extensión del proyecto y rutas relativas. Parte de la
+plantilla ISO A3 horizontal de ArcGIS (o de la que se le pase), deja los `.lyr`
+de cada capa en `<salida>_lyr/` y **no sobrescribe** un `.mxd` que ya exista.
+Lo que no sabe convertir lo omite y lo lista con su motivo, y al terminar
+**reabre** el `.mxd` para comprobar que tiene lo que se puso.
 
 El modo `--batch` convierte todas las capas de un proyecto. Una capa que falla
 se informa y se salta; el lote sigue.
 
 Si el proyecto apunta a una unidad que en esta máquina se llama de otra forma
+(vale en `--batch` y en `--mxd`)
 (`Z:` es `L:\Mi unidad\Carto`), `--remap` lee el dato donde está y deja el
 `.lyr` apuntando a la ruta del proyecto. Es repetible:
 
