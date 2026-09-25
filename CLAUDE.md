@@ -112,7 +112,8 @@ contaminan). Tres modos:
   `checked`, SRC de `projectCrs` y extensión de `<mapcanvas>` (o de
   `ProjectViewSettings/DefaultViewExtent`). Lo que no convierte va a
   `omitidas` con su motivo; un grupo que se queda vacío, también; un ráster
-  `multibandcolor` entra con `MakeRasterLayer` y aviso. `relativePaths` +
+  `multibandcolor` cuyo estilo no se pudo traducir entra con `MakeRasterLayer`
+  (render por defecto) y aviso. `relativePaths` +
   `saveACopy`, y **verifica reabriendo**: capas y grupos (sin bajar dentro de
   un servicio), rutas relativas y fuentes rotas; una rota que apunta a un
   origen de `--remap` o a una unidad inexistente es esperada, cualquier otra da
@@ -141,7 +142,8 @@ Categorizado por concatenación de 2-3 campos (`concat`/`||`, con o sin
 `coalesce(campo,'')`) → valores únicos multicampo con `FieldDelimiter`; los
 nulos que QGIS convierte en `''` se emiten además como `<Null>` y `' '`,
 agrupados con `AddReferenceValue` (`parser_qgis._expresion_multicampo`).
-Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado).
+Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado),
+**RGB** (`multibandcolor`: bandas, alfa, sin realce o estirado mín-máx por banda).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
 Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr` con
 `WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza.
@@ -299,6 +301,18 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   `<text-style>`, y las escalas van **al revés** que en la API: `scaleMax` es el
   `minimumScale` (límite alejado) → `AnnotationMinimumScale`. La fuente, con
   `CreateObject("StdFont")`.
+- **RGB (`RasterRGBRenderer`), medido por render el 2026-09-25**: no expone
+  `IRasterStretchMinMax`; el mín/máx por banda va como estadísticas propias
+  (`StretchStatsType = GlobalStats` + `IArray` de **`StatsHistogram`**, no
+  `RasterStatistics`, que revienta `Update()`). El `IArray` se crea por ProgID
+  (`esriSystem.Array`: `esriSystem.Array` choca con el `Array` de ctypes).
+  **Depende del tipo de dato**: en **8 bits**, `NONE` es la identidad (= QGIS
+  sin realce) y `MinimumMaximum` estira exactamente entre las estadísticas; en
+  **16 bits**, `NONE` reparte el color sobre 0-65535 (un 0-255 sale negro) y
+  `MinimumMaximum` pinta entre mín + 5 % y máx − 5 % con el mín recortado a 0:
+  se compensa ensanchando el rango, y si el mínimo compensado baja de 0 se avisa.
+  La media y la desviación típica no influyen. Los datos de prueba de 8 bits
+  se fuerzan con `CopyRaster`: `CompositeBands` saca 16 bits.
 - **Estadísticas del ráster**: `CalculateStatistics` reescribe los sidecars
   `.aux.xml` en cada pasada (resync inútil en una carpeta sincronizada). Se
   calcula solo si `GetRasterProperties` falla.

@@ -328,6 +328,23 @@ def test_etiquetas(fallos):
         fallos.append(u"no avisa de la expresion: %s" % capa.avisos)
 
 
+def test_raster_rgb(fallos):
+    """QGIS 3.44.12: multibandcolor -> bandas, realce y tramos por banda."""
+    r = _qml("raster_rgb_sin_realce.qml")[0].renderer
+    _igual(fallos, (r.bandas, r.alfa, r.estirado), ((1, 2, 3), None, None),
+           u"RGB sin realce")
+    r = _qml("raster_rgb_estirado.qml")[0].renderer
+    _igual(fallos, (r.bandas, r.estirado),
+           ((3, 2, 1), [(0.0, 200.0), (10.0, 220.0), (20.0, 240.0)]),
+           u"RGB estirado con bandas cambiadas")
+    try:
+        _qml("raster_rgb_mixto.qml")
+        fallos.append(u"realces mezclados deberian rechazarse")
+    except SimbologiaNoSoportada as e:
+        if u"distintos por banda" not in unicode(e):
+            fallos.append(u"mensaje de realces mezclados: %s" % e)
+
+
 def test_remap(fallos):
     """Reglas de --remap: prefijo con frontera de separador y sin mayusculas."""
     regla = parser_qgis.parse_remap(u"Z:=L:\\Mi unidad\\Carto\\")

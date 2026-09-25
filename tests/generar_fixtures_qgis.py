@@ -378,6 +378,52 @@ def qml_etiquetas_no_traducible():
     _guardar_qml(capa, "etiquetas_no_traducible.qml")
 
 
+def _rgb(nombre_fichero, bandas, realces, raster="rgb.tif"):
+    """RGB sobre rgb.tif (8 bits) o rgb16.tif (16 bits). `realces`: por
+    banda, None (sin realce) o (algoritmo, minimo, maximo)."""
+    from qgis.core import QgsContrastEnhancement, QgsMultiBandColorRenderer
+    capa = QgsRasterLayer(os.path.join(DIR_DATOS, raster), "RGB")
+    if not capa.isValid():
+        sys.exit("%s no valido (corre antes run_regresion_qml.py)" % raster)
+    render = QgsMultiBandColorRenderer(capa.dataProvider(), *bandas)
+    fijar = (render.setRedContrastEnhancement,
+             render.setGreenContrastEnhancement,
+             render.setBlueContrastEnhancement)
+    for fija, banda, realce in zip(fijar, bandas, realces):
+        if realce is None:
+            continue
+        algoritmo, minimo, maximo = realce
+        ce = QgsContrastEnhancement(capa.dataProvider().dataType(banda))
+        ce.setContrastEnhancementAlgorithm(getattr(
+            QgsContrastEnhancement, algoritmo))
+        ce.setMinimumValue(minimo)
+        ce.setMaximumValue(maximo)
+        fija(ce)
+    capa.setRenderer(render)
+    _guardar_qml(capa, nombre_fichero)
+
+
+def qml_raster_rgb():
+    _rgb("raster_rgb_sin_realce.qml", (1, 2, 3), (None, None, None))
+    # Bandas cambiadas (3-2-1) y estirado con minimo/maximo propios por banda.
+    _rgb("raster_rgb_estirado.qml", (3, 2, 1), (
+        ("StretchToMinimumMaximum", 0, 200),
+        ("StretchToMinimumMaximum", 10, 220),
+        ("StretchToMinimumMaximum", 20, 240)))
+    # Sin realce en una banda y estirado en las otras: no se traduce.
+    _rgb("raster_rgb_mixto.qml", (1, 2, 3), (
+        None, ("StretchToMinimumMaximum", 10, 220),
+        ("StretchToMinimumMaximum", 20, 240)))
+    # 16 bits: estirado interior (ArcMap lo reproduce compensando su 5%) y
+    # sin realce (el tramo 0-255 no se puede empezar en 0: se avisa).
+    _rgb("raster_rgb16_estirado.qml", (1, 2, 3), (
+        ("StretchToMinimumMaximum", 30, 200),
+        ("StretchToMinimumMaximum", 40, 210),
+        ("StretchToMinimumMaximum", 50, 220)), raster="rgb16.tif")
+    _rgb("raster_rgb16_sin_realce.qml", (1, 2, 3), (None, None, None),
+         raster="rgb16.tif")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -623,6 +669,7 @@ GENERADORES = {
     "categorizado_multicampo": qml_categorizado_multicampo,
     "categorizado_multicampo_barras": qml_categorizado_multicampo_barras,
     "raster_cortes": qml_raster_cortes,
+    "raster_rgb": qml_raster_rgb,
     "etiquetas_simples": qml_etiquetas_simples,
     "etiquetas_expresion": qml_etiquetas_expresion,
     "etiquetas_no_traducible": qml_etiquetas_no_traducible,

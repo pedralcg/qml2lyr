@@ -41,7 +41,7 @@ estilo por defecto.
 | **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
 | **Capa** | definition query, opacidad, visibilidad por escala |
 | **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
-| **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado) |
+| **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
 | **Servicios** (`--batch`) | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
 

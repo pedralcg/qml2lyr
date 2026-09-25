@@ -204,8 +204,47 @@ def _dump_renderer(rend):
     return {"tipo": "no-soportado", "clase": type(rend).__name__}
 
 
+def _dump_rgb(rgb, rend):
+    """RasterRGBRenderer -> dict (bandas desde 1, como en QGIS)."""
+    _, CA = _mods()
+    d = {"tipo": "raster_rgb", "bandas": [
+        (idx + 1) if usar else None for usar, idx in (
+            (rgb.UseRedBand, rgb.RedBandIndex),
+            (rgb.UseGreenBand, rgb.GreenBandIndex),
+            (rgb.UseBlueBand, rgb.BlueBandIndex))]}
+    rgb2 = _qi(rend, CA.IRasterRGBRenderer2)
+    if rgb2 is not None and rgb2.UseAlphaBand:
+        d["alfa"] = rgb2.AlphaBandIndex + 1
+    est = _qi(rend, CA.IRasterStretch2)
+    d["estirado"] = {CA.esriRasterStretch_NONE: "ninguno",
+                     CA.esriRasterStretch_MinimumMaximum: "minmax"}.get(
+        est.StretchType, "otro:%s" % est.StretchType)
+    if d["estirado"] == "minmax" and \
+            est.StretchStatsType == CA.esriRasterStretchStats_GlobalStats:
+        # Tramo EFECTIVO por banda (medido, ver el emisor): en 8 bits, las
+        # estadisticas tal cual; en otros tipos ArcMap pinta entre min + 5% y
+        # max - 5%.
+        import comtypes.gen.esriDataSourcesRaster as DSR
+        import comtypes.gen.esriGeoDatabase as GDB
+        raster = _qi(rend, CA.IRasterRenderer).Raster
+        tipo = _qi(raster, DSR.IRasterProps).PixelType
+        ocho_bits = tipo in (GDB.PT_UCHAR, GDB.PT_CHAR)
+        tramos = []
+        estadisticas = est.StretchStats
+        for i in range(estadisticas.Count):
+            h = _qi(estadisticas.Element[i], DSR.IStatsHistogram)
+            margen = 0.0 if ocho_bits else 0.05 * (h.Max - h.Min)
+            tramos.append([round(h.Min + margen, 3), round(h.Max - margen, 3)])
+        d["tramos"] = tramos
+    return d
+
+
 def _dump_renderer_raster(rend):
     _, CA = _mods()
+
+    rgb = _qi(rend, CA.IRasterRGBRenderer)
+    if rgb is not None:
+        return _dump_rgb(rgb, rend)
 
     uv = _qi(rend, CA.IRasterUniqueValueRenderer)
     if uv is not None:

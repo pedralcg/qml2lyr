@@ -263,6 +263,20 @@ class RendererRasterEstirado(object):
         self.paradas = paradas  # ParadaColor, ascendentes por valor
 
 
+class RendererRasterRGB(object):
+    """multibandcolor de QGIS -> RasterRGBRenderer.
+
+    `bandas`: (roja, verde, azul) numeradas desde 1 como en QGIS; None = sin
+    esa banda. `alfa`: banda alfa o None. `estirado`: None (valores tal cual,
+    NoEnhancement) o una lista de (minimo, maximo) por banda (estirado lineal
+    entre esos valores, StretchToMinimumMaximum)."""
+
+    def __init__(self, bandas, alfa=None, estirado=None):
+        self.bandas = bandas
+        self.alfa = alfa
+        self.estirado = estirado
+
+
 class CapaEstilo(object):
     """Estilo completo de una capa: lo que el emisor convierte en un .lyr."""
 

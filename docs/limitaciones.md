@@ -92,9 +92,9 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   motivo (p. ej. un generador de geometría); un grupo cuyas capas se omiten
   todas, también. No se mete con una simbología por defecto que aparente
   estar convertida.
-- **Excepción**: un ráster **RGB** (`multibandcolor`) entra con el render RGB
-  por defecto de ArcMap, avisando: la simbología de QGIS (bandas, estirado) no
-  se traslada.
+- **Excepción**: un ráster **RGB** (`multibandcolor`) cuyo estilo no se pudo
+  traducir (p. ej. realces distintos por banda) entra con el render RGB por
+  defecto de ArcMap, avisando. El RGB normal se convierte como cualquier capa.
 - No viajan: el **título** del proyecto (arcpy no lo guarda), el **orden de
   dibujado propio** (se dibuja en el orden del árbol, y se avisa), los temas de
   mapa, los marcadores ni las composiciones.
@@ -159,6 +159,16 @@ símbolo más fiel posible y **avisa** de la pérdida:
   una clase `<Null>` y en ArcMap **no se dibujaban** los valores sin categoría.
 
 ### Ráster, específico
+
+- **RGB** (`multibandcolor`): viajan las bandas (también cambiadas, p. ej.
+  falso color 4-3-2), la banda alfa, «sin realce» y el estirado entre mínimo y
+  máximo por banda (también con recorte, avisando: QGIS no pinta lo que queda
+  fuera y ArcMap lo pinta con el color del extremo). Medido por render, celda a
+  celda contra QGIS (±3 niveles). **No** viajan otros realces
+  (`UserDefinedEnhancement`) ni **realces distintos por banda**: se rechaza con
+  mensaje. En datos de **16 bits** sin realce, ArcMap no puede empezar el
+  estirado en 0 y los tonos más bajos (hasta ~14 niveles) salen algo más
+  oscuros: se avisa.
 
 - **Valores ocultos por transparencia** (`rasterTransparency`): ArcMap no tiene
   transparencia por clase. El 100% oculto se reproduce con símbolo nulo

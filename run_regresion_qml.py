@@ -47,6 +47,7 @@ GDB_NULOS = os.path.join(DIR_DATOS, "nulos.gdb")
 FC_NULOS = os.path.join(GDB_NULOS, "cuadros")
 SHP_NULOS = os.path.join(DIR_DATOS, "cuadros_nulos.shp")
 RASTER_RGB = os.path.join(DIR_DATOS, "rgb.tif")
+RASTER_RGB16 = os.path.join(DIR_DATOS, "rgb16.tif")
 # Raster flotante SIN estadisticas: el caso de la pendiente de Majal Blanco.
 RASTER_CORTES = os.path.join(DIR_DATOS, "cortes.tif")
 # Sidecar que escribe GDAL (estadisticas aproximadas, SIN histograma), como el
@@ -127,8 +128,11 @@ def _preparar_datos():
             if os.path.exists(sidecar):
                 os.remove(sidecar)
 
-    if not arcpy.Exists(RASTER_RGB):
-        # Raster de 3 bandas (el caso de las ortos RGB en el modo --mxd).
+    # Rasters de 3 bandas con los mismos valores: rgb.tif en 8 bits (como las
+    # ortos) y rgb16.tif en 16 bits sin signo. ArcMap estira distinto segun el
+    # tipo (medido, ver emisor._renderer_rgb). CompositeBands saca 16 bits
+    # aunque las bandas sean de 8: el de 8 se fuerza con CopyRaster.
+    if not arcpy.Exists(RASTER_RGB) or not arcpy.Exists(RASTER_RGB16):
         import numpy
         bandas = []
         for i in range(3):
@@ -138,8 +142,13 @@ def _preparar_datos():
             arcpy.NumPyArrayToRaster(numpy.roll(arr, i), arcpy.Point(
                 600000, 4200000), 10, 10).save(banda)
             bandas.append(banda)
-        arcpy.CompositeBands_management(u";".join(bandas), RASTER_RGB)
-        arcpy.DefineProjection_management(RASTER_RGB, sr)
+        for ruta in (RASTER_RGB, RASTER_RGB16):
+            if arcpy.Exists(ruta):
+                arcpy.Delete_management(ruta)
+        arcpy.CompositeBands_management(u";".join(bandas), RASTER_RGB16)
+        arcpy.DefineProjection_management(RASTER_RGB16, sr)
+        arcpy.CopyRaster_management(RASTER_RGB16, RASTER_RGB,
+                                    pixel_type="8_BIT_UNSIGNED")
         for banda in bandas:
             arcpy.Delete_management(banda)
 
@@ -756,6 +765,103 @@ def caso_etiquetas(fallos):
            u"sin etiquetas si la expresion no se traduce")
 
 
+# Color que QGIS 3.44.12 da al centro de cada celda de rgb.tif (fila, columna)
+# con cada fixture, leido del render (2026-09-25).
+COLORES_QGIS_RGB = {
+    u"raster_rgb_sin_realce": [
+        [(0, 128, 0), (128, 0, 128), (255, 128, 0)],
+        [(64, 255, 128), (192, 64, 255), (32, 192, 64)],
+        [(255, 32, 192), (0, 255, 32), (128, 0, 255)]],
+    u"raster_rgb_estirado": [
+        [(0, 143, 0), (163, 0, 125), (0, 143, 255)],
+        [(163, 255, 51), (255, 65, 199), (81, 221, 13)],
+        [(244, 26, 255), (40, 255, 0), (255, 0, 125)]],
+    # Sobre rgb16.tif (mismos valores, 16 bits).
+    u"raster_rgb16_estirado": [
+        [(0, 132, 0), (147, 0, 117), (255, 132, 0)],
+        [(51, 255, 117), (243, 36, 255), (3, 228, 21)],
+        [(255, 0, 213), (0, 255, 0), (147, 0, 255)]],
+}
+
+
+def _colores_celdas_arcmap(ruta_lyr, png):
+    """Color que ArcMap pinta en el centro de cada celda de rgb.tif, situado
+    con el world file del PNG (ArcMap ajusta la extension al marco)."""
+    import arcpy
+    mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    df.spatialReference = arcpy.SpatialReference(25830)
+    arcpy.mapping.AddLayer(df, arcpy.mapping.Layer(ruta_lyr))
+    df.extent = arcpy.Extent(600000, 4200000, 600030, 4200030)
+    arcpy.mapping.ExportToPNG(mxd, png, df, df_export_width=300,
+                              df_export_height=300, world_file=True)
+    del mxd
+    a = arcpy.RasterToNumPyArray(png)
+    tfw = [float(v) for v in open(png[:-4] + ".pgw").read().split()]
+    colores = []
+    for fila in range(3):
+        colores.append([])
+        for col in range(3):
+            x, y = 600005 + 10 * col, 4200025 - 10 * fila
+            px = int(round((x - tfw[4]) / tfw[0]))
+            py = int(round((y - tfw[5]) / tfw[3]))
+            colores[-1].append(tuple(int(a[b, py, px]) for b in range(3)))
+    return colores
+
+
+def caso_raster_rgb(fallos):
+    """(19) RGB (multibandcolor): bandas (tambien cambiadas), sin realce o
+    estirado entre minimo y maximo por banda, en 8 y en 16 bits (ArcMap
+    estira distinto segun el tipo). El color de cada celda en ArcMap tiene
+    que ser el de QGIS (+-3). Realces mezclados: se rechaza. 16 bits sin
+    realce: sale, avisando de que el tramo bajo no se puede reproducir."""
+    esperados_volcado = {
+        u"raster_rgb_sin_realce": (RASTER_RGB, {
+            u"tipo": u"raster_rgb", u"bandas": [1, 2, 3],
+            u"estirado": u"ninguno"}),
+        u"raster_rgb_estirado": (RASTER_RGB, {
+            u"tipo": u"raster_rgb", u"bandas": [3, 2, 1],
+            u"estirado": u"minmax",
+            u"tramos": [[0.0, 200.0], [10.0, 220.0], [20.0, 240.0]]}),
+        u"raster_rgb16_estirado": (RASTER_RGB16, {
+            u"tipo": u"raster_rgb", u"bandas": [1, 2, 3],
+            u"estirado": u"minmax",
+            u"tramos": [[30.0, 200.0], [40.0, 210.0], [50.0, 220.0]]}),
+    }
+    for nombre, (raster, esperado) in sorted(esperados_volcado.items()):
+        lyr = _salida(nombre + u".lyr")
+        rc, out, err = _lanzar([os.path.join(DIR_QML, nombre + u".qml"),
+                                raster, lyr])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"%s no convirtio: %r" % (nombre, capa))
+            continue
+        _igual(fallos, lyr_dump.dump_lyr(lyr).get("renderer"), esperado,
+               u"volcado de %s" % nombre)
+        obtenidos = _colores_celdas_arcmap(lyr, _salida(nombre + u".png"))
+        for fila in range(3):
+            for col in range(3):
+                q = COLORES_QGIS_RGB[nombre][fila][col]
+                am = obtenidos[fila][col]
+                if max(abs(q[i] - am[i]) for i in range(3)) > 3:
+                    fallos.append(u"%s celda (%d,%d): QGIS %r, ArcMap %r"
+                                  % (nombre, fila, col, q, am))
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"raster_rgb_mixto.qml"),
+                            RASTER_RGB, _salida(u"raster_rgb_mixto.lyr")])
+    # El rechazo llega al parsear el .qml: va a nivel de documento.
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, (datos.get("ok"), datos.get("tipo_error")),
+           (False, u"SimbologiaNoSoportada"), u"realces mezclados")
+
+    rc, out, err = _lanzar([os.path.join(DIR_QML,
+                                         u"raster_rgb16_sin_realce.qml"),
+                            RASTER_RGB16, _salida(u"raster_rgb16_sin.lyr")])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    _igual(fallos, capa.get("ok"), True, u"16 bits sin realce sale")
+    if not any(u"mas oscuros" in a for a in capa.get("avisos") or []):
+        fallos.append(u"16 bits sin realce sin aviso: %r" % capa.get("avisos"))
+
+
 def caso_categoria_resto_nula(fallos):
     """(13) La categoria NULL de QGIS es "todos los demas valores": en ArcMap
     va al simbolo por defecto. Antes salia como clase "<Null>" y la entidad B
@@ -1051,8 +1157,13 @@ def caso_modo_mxd(fallos):
     _igual(fallos, sorted(o["nombre"] for o in datos["omitidas"]),
            [u"Hitos flecha", u"Hitos flecha 2", u"[grupo] Solo fallos"],
            u"omitidas")
-    if not any(u"'RGB'" in a for a in datos["avisos"]):
-        fallos.append(u"sin aviso del RGB: %r" % datos["avisos"])
+    # El RGB se convierte como cualquier capa (desde su .lyr), sin el
+    # respaldo de «render por defecto».
+    rgb = [c for c in datos["capas"] if c.get("nombre") == u"RGB"]
+    if not rgb or not rgb[0].get("en_mxd"):
+        fallos.append(u"el RGB no entro convertido: %r" % rgb)
+    if any(u"'RGB'" in a for a in datos["avisos"]):
+        fallos.append(u"el RGB uso el respaldo: %r" % datos["avisos"])
     _igual(fallos, datos["verificacion"]["rutas_relativas"], True,
            u"rutas relativas")
     _igual(fallos, datos["verificacion"]["rotas"], [], u"fuentes rotas")
@@ -1161,6 +1272,7 @@ CASOS = [
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
     ("raster_cortes_aux_gdal", caso_raster_cortes_aux_gdal),
     ("etiquetas", caso_etiquetas),
+    ("raster_rgb", caso_raster_rgb),
     ("categoria_resto_nula", caso_categoria_resto_nula),
     ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),

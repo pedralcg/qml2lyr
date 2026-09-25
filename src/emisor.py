@@ -25,7 +25,8 @@ from modelo import (SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
                     RendererSimple, RendererValoresUnicos, RendererGraduado,
                     RendererRasterValoresUnicos, RendererRasterCortes,
-                    RendererRasterEstirado, ServicioWMTS,
+                    RendererRasterEstirado, RendererRasterRGB,
+                    ServicioWMTS,
                     SimbologiaNoSoportada)
 
 # Directorio temporal de la emision en curso: lo fija emitir() y lo consume la
@@ -40,7 +41,7 @@ _PICTURE_TYPES = {"bmp": "esriIPictureBitmap", "emf": "esriIPictureEMF",
                   "png": "esriIPicturePNG"}
 
 _RENDERERS_RASTER = (RendererRasterValoresUnicos, RendererRasterCortes,
-                     RendererRasterEstirado)
+                     RendererRasterEstirado, RendererRasterRGB)
 
 # Color con el que se emite un relleno hueco: gris claro totalmente
 # transparente (convencion heredada del motor validado a mano).
@@ -378,7 +379,7 @@ def _renderer(renderer_modelo):
         u"renderer %s sin emisor" % type(renderer_modelo).__name__)
 
 
-def _renderer_raster(renderer_modelo, raster, minimo=None):
+def _renderer_raster(renderer_modelo, raster, minimo=None, avisos=None):
     """Renderer raster del modelo -> IRasterRenderer ya enganchado al raster.
 
     `minimo`: minimo del raster, para el Break[0] del clasificado."""
@@ -436,8 +437,94 @@ def _renderer_raster(renderer_modelo, raster, minimo=None):
     if isinstance(renderer_modelo, RendererRasterEstirado):
         return _renderer_estirado(renderer_modelo, raster)
 
+    if isinstance(renderer_modelo, RendererRasterRGB):
+        return _renderer_rgb(renderer_modelo, raster,
+                             avisos if avisos is not None else [])
+
     raise SimbologiaNoSoportada(
         u"renderer raster %s sin emisor" % type(renderer_modelo).__name__)
+
+
+def _renderer_rgb(renderer_modelo, raster, avisos):
+    """RendererRasterRGB -> RasterRGBRenderer. Bandas de QGIS (desde 1) a
+    indices de ArcMap (desde 0); estirado MinimumMaximum que reproduce el
+    tramo [minimo, maximo] de QGIS por banda ([0, 255] si no hay realce)."""
+    _, CA = _mods()
+    rgb = _nobj(CA.RasterRGBRenderer, CA.IRasterRGBRenderer)
+    rr = _qi_exig(rgb, CA.IRasterRenderer)
+    rr.Raster = raster
+    import comtypes.gen.esriDataSourcesRaster as DSR
+    bandas_raster = _qi(raster, DSR.IRasterBandCollection)
+    n_bandas = bandas_raster.Count if bandas_raster is not None else None
+    usadas = [b for b in renderer_modelo.bandas if b] + \
+        ([renderer_modelo.alfa] if renderer_modelo.alfa else [])
+    if n_bandas is not None and max(usadas) > n_bandas:
+        raise SimbologiaNoSoportada(
+            u"el estilo usa la banda %d y el raster tiene %d"
+            % (max(usadas), n_bandas))
+    roja, verde, azul = renderer_modelo.bandas
+    for usar, indice, banda in ((u"UseRedBand", u"RedBandIndex", roja),
+                                (u"UseGreenBand", u"GreenBandIndex", verde),
+                                (u"UseBlueBand", u"BlueBandIndex", azul)):
+        setattr(rgb, usar, banda is not None)
+        if banda is not None:
+            setattr(rgb, indice, banda - 1)
+    if renderer_modelo.alfa:
+        rgb2 = _qi_exig(rgb, CA.IRasterRGBRenderer2)
+        rgb2.UseAlphaBand = True
+        rgb2.AlphaBandIndex = renderer_modelo.alfa - 1
+    # Estirado. RasterRGBRenderer no expone IRasterStretchMinMax: el minimo y
+    # maximo por banda van como estadisticas propias (StretchStatsType =
+    # GlobalStats + un IArray de StatsHistogram en orden R, G, B). Medido el
+    # 2026-09-25 sobre degradados de 256 valores; DEPENDE DEL TIPO DE DATO:
+    # - 8 bits: NONE es la identidad (y es lo que hace QGIS sin realce), y
+    #   MinimumMaximum estira exactamente entre el min y el max dados.
+    # - 16 bits: NONE reparte el color sobre 0-65535 (un 0-255 sale negro), y
+    #   MinimumMaximum pinta lineal entre min + 5% y max - 5% del rango dado,
+    #   con el min recortado a 0. Se compensa pasando el rango ensanchado
+    #   (R = (b - a) / 0.9, min = a - 0.05 R, max = b + 0.05 R); si ese min
+    #   baja de 0 no hay compensacion posible y se avisa de lo que pintara.
+    # La media y la desviacion tipica no influyen (medido).
+    import comtypes.gen.esriGeoDatabase as GDB
+    import comtypes.gen.esriSystem as S
+    from comtypes.client import CreateObject
+    tipo = _qi_exig(raster, DSR.IRasterProps).PixelType
+    ocho_bits = tipo in (GDB.PT_UCHAR, GDB.PT_CHAR)
+    estirar = _qi_exig(rgb, CA.IRasterStretch2)
+    if renderer_modelo.estirado is None and ocho_bits:
+        estirar.StretchType = CA.esriRasterStretch_NONE
+        rr.Update()
+        return rr
+    if not ocho_bits and tipo != GDB.PT_USHORT:
+        avisos.append(u"RGB sobre datos de tipo %s: el estirado de ArcMap solo "
+                      u"se ha medido en 8 y 16 bits sin signo" % tipo)
+    estirar.StretchType = CA.esriRasterStretch_MinimumMaximum
+    tramos = iter(renderer_modelo.estirado or [])
+    estadisticas = CreateObject("esriSystem.Array", interface=S.IArray)
+    for color, banda in zip((u"roja", u"verde", u"azul"),
+                            renderer_modelo.bandas):
+        a, b = (next(tramos) if renderer_modelo.estirado and banda
+                else (0.0, 255.0))
+        minimo, maximo = a, b
+        if not ocho_bits:
+            rango = (b - a) / 0.9
+            minimo, maximo = a - 0.05 * rango, b + 0.05 * rango
+            if minimo < 0 and banda:
+                # Recortado a 0 por ArcMap: se conserva el techo.
+                minimo, maximo = 0.0, b / 0.95
+                avisos.append(
+                    u"banda %s: QGIS estira entre %g y %g; con este tipo de "
+                    u"dato ArcMap no puede empezar por debajo de %.1f, asi que "
+                    u"los valores mas bajos salen algo mas oscuros"
+                    % (color, a, b, 0.05 * maximo))
+        h = _nobj(DSR.StatsHistogram, DSR.IStatsHistogram)
+        h.Min, h.Max = minimo, maximo
+        h.Mean, h.StdDev = (a + b) / 2.0, (b - a) / 4.0
+        estadisticas.Add(h)
+    estirar.StretchStatsType = CA.esriRasterStretchStats_GlobalStats
+    estirar.StretchStats = estadisticas
+    rr.Update()
+    return rr
 
 
 def _rampa_multiparte(paradas, minimo, maximo, resolucion=256):
@@ -811,7 +898,7 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
         with _paso(u"renderer %s del raster"
                    % type(capa_estilo.renderer).__name__):
             rl.Renderer = _renderer_raster(capa_estilo.renderer, rl.Raster,
-                                           minimo)
+                                           minimo, capa_estilo.avisos)
     else:
         _qi_exig(layer, CA.IGeoFeatureLayer).Renderer = _renderer(
             capa_estilo.renderer)
@@ -1379,9 +1466,12 @@ def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None):
                         parser_qgis.remapear(capa.workspacePath,
                                              [(regla[1], regla[0])])[0], False)
                 capa.name = nodo["nombre"]
+                # Respaldo: el RGB se convierte como cualquier capa; aqui solo
+                # llega el que no se pudo traducir (p. ej. realces mezclados).
                 avisos.append(u"'%s': raster RGB con el render por defecto de "
-                              u"ArcMap (la simbologia de QGIS no se traslada)"
-                              % nodo["nombre"])
+                              u"ArcMap, porque su estilo no se pudo traducir "
+                              u"(%s)" % (nodo["nombre"], u"; ".join(
+                                  r.get("error") or u"" for r in fallos)))
                 return [capa]
         motivo = u"; ".join(r.get("error") or u"" for r in fallos) or \
             u"capa sin resultado de conversion"

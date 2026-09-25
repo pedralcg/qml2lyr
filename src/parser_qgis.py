@@ -28,7 +28,8 @@ from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     ClaseValor, RendererValoresUnicos, ClaseRango,
                     RendererGraduado, RendererRasterValoresUnicos,
                     ClaseCorteRaster, RendererRasterCortes,
-                    ParadaColor, RendererRasterEstirado, CapaEstilo,
+                    ParadaColor, RendererRasterEstirado,
+                    RendererRasterRGB, CapaEstilo,
                     ServicioWMS, ServicioWMTS, Etiquetado,
                     SimbologiaNoSoportada)
 
@@ -965,7 +966,7 @@ def _transparencias_por_valor(rr_elem, avisos):
     rt = rr_elem.find("rasterTransparency")
     if rt is None:
         return fuera
-    if rt.find("threeValuePixelList") is not None:
+    if rt.find("threeValuePixelList/pixelListEntry") is not None:
         avisos.append(u"la capa oculta valores por combinacion RGB: ArcMap no "
                       u"lo reproduce")
     for e in rt.iter("pixelListEntry"):
@@ -984,6 +985,59 @@ def _transparencias_por_valor(rr_elem, avisos):
             continue
         fuera[float(vmin)] = pct
     return fuera
+
+
+#: Realces de contraste de QGIS que se traducen, por banda.
+_REALCES_RGB = (u"NoEnhancement", u"StretchToMinimumMaximum",
+                u"StretchAndClipToMinimumMaximum", u"ClipToMinimumMaximum")
+
+
+def _banda_rgb(valor):
+    n = int(valor or -1)
+    return n if n >= 1 else None
+
+
+def _renderer_rgb(rr_elem, avisos):
+    """<rasterrenderer type="multibandcolor"> -> RendererRasterRGB.
+
+    Medido el 2026-09-25 con la orto PNOA 2025 de Murcia: QGIS sin realce y
+    ArcMap RGB 1-2-3 sin estirado dan las mismas medias por canal (+-0,1).
+    Los realces se traducen solo si las tres bandas usan el mismo: mezclar
+    «sin realce» en una y «estirado» en otra exige el rango del tipo de dato,
+    que el estilo no dice."""
+    bandas = tuple(_banda_rgb(rr_elem.get(k))
+                   for k in ("redBand", "greenBand", "blueBand"))
+    if not any(bandas):
+        raise SimbologiaNoSoportada(u"RGB sin ninguna banda asignada")
+    alfa = _banda_rgb(rr_elem.get("alphaBand"))
+    _transparencias_por_valor(rr_elem, avisos)
+    realces = []
+    for color, banda in zip((u"red", u"green", u"blue"), bandas):
+        if banda is None:
+            continue
+        ce = rr_elem.find(color + "ContrastEnhancement")
+        algoritmo = ce.findtext("algorithm") if ce is not None else \
+            u"NoEnhancement"
+        if algoritmo not in _REALCES_RGB:
+            raise SimbologiaNoSoportada(
+                u"RGB con realce '%s' en la banda %s: solo se traduce sin "
+                u"realce o estirado entre minimo y maximo" % (algoritmo, color))
+        minimo = float(ce.findtext("minValue")) if ce is not None else None
+        maximo = float(ce.findtext("maxValue")) if ce is not None else None
+        realces.append((algoritmo, minimo, maximo))
+    if len(set(a for a, _, _ in realces)) > 1:
+        raise SimbologiaNoSoportada(
+            u"RGB con realces distintos por banda (%s): ArcMap estira las "
+            u"tres igual" % u", ".join(a for a, _, _ in realces))
+    algoritmo = realces[0][0]
+    if algoritmo == u"NoEnhancement":
+        return RendererRasterRGB(bandas=bandas, alfa=alfa)
+    if algoritmo != u"StretchToMinimumMaximum":
+        avisos.append(u"RGB con '%s': QGIS no pinta los valores fuera del "
+                      u"rango y ArcMap los pinta con el color del extremo"
+                      % algoritmo)
+    return RendererRasterRGB(bandas=bandas, alfa=alfa,
+                             estirado=[(mn, mx) for _, mn, mx in realces])
 
 
 def _pseudocolor_interpolado(rr_elem, shader, ocultos, avisos):
@@ -1044,6 +1098,9 @@ def _renderer_raster(rr_elem, avisos):
     """<rasterrenderer> -> renderer del modelo. paletted, pseudocolor DISCRETE
     (clases) y pseudocolor INTERPOLATED (estirado)."""
     tipo = rr_elem.get("type")
+
+    if tipo == "multibandcolor":
+        return _renderer_rgb(rr_elem, avisos)
 
     if rr_elem.get("alphaBand") not in (None, "-1"):
         avisos.append(u"la capa usa banda alfa (%s): ArcMap no la aplica"
