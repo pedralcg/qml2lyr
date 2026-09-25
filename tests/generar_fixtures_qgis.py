@@ -230,6 +230,18 @@ def qml_reglas_avisos_por_regla():
     _guardar_qml(capa, "reglas_avisos_por_regla.qml")
 
 
+def qml_categoria_resto_nula():
+    """Categoria A + la categoria NULL que QGIS usa como "todos los demas
+    valores" (QgsRendererCategory con valor nulo). B no tiene categoria: en
+    QGIS cae en la NULL, asi que tiene que dibujarse tambien en ArcMap."""
+    capa = _vectorial("poligonos.shp", "Resto nulo")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _relleno("#e41a1c", 0.26), "Tipo A"),
+        QgsRendererCategory(None, _relleno("#999999", 0.26),
+                            "Todos los demas valores")]))
+    _guardar_qml(capa, "categoria_resto_nula.qml")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -361,6 +373,7 @@ GENERADORES = {
     "puntos_hexagono_equilatero": qml_hexagono_equilatero,
     "categoria_oculta_no_soportada": qml_categoria_oculta_no_soportada,
     "reglas_avisos_por_regla": qml_reglas_avisos_por_regla,
+    "categoria_resto_nula": qml_categoria_resto_nula,
     "batch_sintetico": qgz_batch_sintetico,
     "batch_remap": qgz_batch_remap,
 }

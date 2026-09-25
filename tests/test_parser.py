@@ -202,6 +202,17 @@ def test_datasource_y_campos(fallos):
     _igual(fallos, defquery, u"\"A\" = 'x|y'", u"| dentro de un literal")
 
 
+def test_categoria_resto_nula(fallos):
+    """QGIS 3.44.12: la categoria NULL es "todos los demas" -> simbolo por
+    defecto, no una clase "<Null>"."""
+    rend = _qml("categoria_resto_nula.qml")[0].renderer
+    _igual(fallos, [c.valor for c in rend.clases], [u"A"], u"clases")
+    _igual(fallos, rend.default_label, u"Todos los demas valores",
+           u"etiqueta del simbolo por defecto")
+    if rend.default_simbolo is None:
+        fallos.append(u"sin simbolo por defecto")
+
+
 def test_remap(fallos):
     """Reglas de --remap: prefijo con frontera de separador y sin mayusculas."""
     regla = parser_qgis.parse_remap(u"Z:=L:\\Mi unidad\\Carto\\")

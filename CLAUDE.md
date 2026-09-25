@@ -147,10 +147,17 @@ RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
   QGIS no dibuja tumbaba la capa entera. Lo mismo en categorizado y graduado: los
   símbolos de las clases con `render="false"` tampoco se parsean
   (`_simbolos_visibles`).
-- **Categoría de NULOS: el valor que casa en ArcMap es `<Null>`** (verificado
-  por render sobre una file geodatabase con un campo nulo). QGIS serializa la
-  categoría nula como `type="NULL" value="NULL"`: emitirla tal cual mandaba a
-  ArcMap a casar el *texto* "NULL". Se traduce y se avisa.
+- **La categoría `type="NULL"` de QGIS es «todos los demás valores», no «solo
+  los nulos»** (medido con `symbolForFeature` en QGIS 3.44.12, 2026-09-25: recoge
+  los nulos **y** todo valor sin categoría). Va al **símbolo por defecto** de
+  ArcMap, que también recoge los nulos (medido con `SymbolByFeature`). Hasta el
+  2026-09-25 se emitía como clase `<Null>` y los valores sin categoría **no se
+  dibujaban** en ArcMap.
+- **Cómo compone ArcMap el valor de un nulo** (medido con `SymbolByFeature`): en
+  una geodatabase, `<Null>` (y en varios campos, `1, <Null>`). En un **shapefile**
+  arcpy lee el texto vacío como `' '` (un espacio) y el numérico vacío como `0`;
+  QGIS lee los dos como NULL. `SymbolByFeature` no casa nada sin
+  `PrepareFilter` antes: la regresión lo usa en `_color_por_entidad`.
 - **Trazo discontinuo con ancho ≥ 2 pt: ArcMap lo dibuja CONTINUO** (medido por
   render). El patrón de `esriSimpleLineStyle` está en unidades de dispositivo y
   lo tapa el grosor de la pluma. Se emite el estilo pedido y **se avisa**.

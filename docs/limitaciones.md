@@ -100,9 +100,11 @@ símbolo más fiel posible y **avisa** de la pérdida:
 - **Visibilidad por escala de una REGLA** (`scalemindenom`/`scalemaxdenom` en un
   rule-based): se ignora y se avisa. ArcMap solo tiene escalas por capa, y la
   capa ya lleva las suyas (esas **sí** se trasladan).
-- **Categoría de valores NULOS**: se emite con el valor `<Null>`, que es el que
-  casa los nulos reales en ArcMap (verificado por render). Se avisa, porque un
-  shapefile no guarda nulos y allí esa clase no casará ninguna entidad.
+- **Categoría «Todos los demás valores»** (la categoría NULL de QGIS): pasa al
+  **símbolo por defecto** de ArcMap. En QGIS esa categoría recoge los nulos y
+  todo valor sin categoría propia, igual que el símbolo por defecto de ArcMap
+  (medido en los dos programas el 2026-09-25). Hasta esa fecha se emitía como
+  una clase `<Null>` y en ArcMap **no se dibujaban** los valores sin categoría.
 
 ### Ráster, específico
 

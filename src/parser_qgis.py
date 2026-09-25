@@ -75,9 +75,11 @@ _ANCHO_PT_TRAZO_CONTINUO = 2.0
 _TRAMAS_RELLENO = ("horizontal", "vertical", "cross", "b_diagonal",
                    "f_diagonal", "diagonal_x")
 
-# Valor que IUniqueValueRenderer necesita para casar un NULL real. Verificado
-# por render (2026-09-20): con "<Null>" la entidad nula recibe su simbolo; con
-# "NULL", "" o "<null>" cae al simbolo por defecto.
+# Como nombra IUniqueValueRenderer un NULL real al componer el valor.
+# Verificado por render (2026-09-20) y con SymbolByFeature (2026-09-25): con
+# "<Null>" la entidad nula recibe su simbolo; con "NULL", "" o "<null>" cae al
+# simbolo por defecto. En valores de VARIOS campos cada nulo sale como "<Null>"
+# dentro del valor compuesto ("1, <Null>").
 _VALOR_NULO_ARCMAP = u"<Null>"
 
 
@@ -661,17 +663,14 @@ def _renderer_categorizado(rend_elem, avisos):
             continue
 
         if cat.get("type") == "NULL":
-            # Categoria de valores NULOS. QGIS la serializa type="NULL"
-            # value="NULL": emitirla tal cual mandaria a ArcMap a casar el
-            # TEXTO "NULL". Verificado por render (2026-09-20): el valor que
-            # casa los nulos reales de ArcMap es exactamente "<Null>".
-            clases.append(ClaseValor(valor=_VALOR_NULO_ARCMAP, label=label,
-                                     simbolo=simbolo))
-            avisos.append(
-                u"categoria '%s' de valores NULOS: se emite con el valor "
-                u"'%s', que es como ArcMap nombra el nulo (un shapefile no "
-                u"guarda nulos: alli no casara ninguna entidad)"
-                % (label, _VALOR_NULO_ARCMAP))
+            # La categoria NULL de QGIS (type="NULL" value="NULL") NO es "solo
+            # los nulos": es el cajon de "todos los demas valores". Medido con
+            # symbolForFeature en QGIS 3.44.12 (2026-09-25): recoge los nulos
+            # Y cualquier valor sin categoria. Su equivalente en ArcMap es el
+            # simbolo por defecto, que tambien recoge los nulos (medido con
+            # SymbolByFeature). Emitirla como clase "<Null>" (lo que se hacia)
+            # dejaba SIN DIBUJAR en ArcMap todo valor sin categoria.
+            default_simbolo, default_label = simbolo, label
             continue
 
         valor = cat.get("value")

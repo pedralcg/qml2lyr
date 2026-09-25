@@ -164,6 +164,40 @@ def _salida(nombre):
     return os.path.join(DIR_OUT, nombre)
 
 
+def _color_por_entidad(ruta_lyr):
+    """Color de relleno (#rrggbb) que el renderer del .lyr da a cada entidad,
+    en orden de OID; None si no la dibuja.
+
+    Usa IFeatureRenderer.SymbolByFeature, que es lo que llama Draw: mide que
+    clase casa de verdad, no que valores lleva el renderer. Sin PrepareFilter
+    el renderer no resuelve sus campos y no casa nada (medido 2026-09-25)."""
+    import emisor
+    emisor._init_arcobjects()
+    D, CA = emisor._mods()
+    import comtypes.gen.esriGeoDatabase as G
+    lf = emisor._nobj(CA.LayerFile, CA.ILayerFile)
+    lf.Open(ruta_lyr)
+    capa = lf.Layer
+    fc = emisor._qi_exig(capa, CA.IFeatureLayer).FeatureClass
+    rend = emisor._qi_exig(capa, CA.IGeoFeatureLayer).Renderer
+    filtro = emisor._nobj(G.QueryFilter, G.IQueryFilter)
+    rend.PrepareFilter(fc, filtro)
+    cursor = fc.Search(filtro, False)
+    colores = []
+    entidad = cursor.NextFeature()
+    while entidad:
+        simbolo = rend.SymbolByFeature(entidad)
+        if not simbolo:
+            colores.append(None)
+        else:
+            bgr = emisor._qi_exig(simbolo, D.IFillSymbol).Color.RGB
+            colores.append(u"#%02x%02x%02x" % (bgr & 0xFF, (bgr >> 8) & 0xFF,
+                                               (bgr >> 16) & 0xFF))
+        entidad = cursor.NextFeature()
+    lf.Close()
+    return colores
+
+
 # --------------------------------------------------------------------- casos
 def caso_defquery_args_json(fallos):
     """(1) La def-query de la capa viva llega al .lyr por --args-json."""
@@ -519,6 +553,28 @@ def caso_regla_desmarcada_simbolo_raro(fallos):
         fallos.append(u"se emitio la regla desmarcada")
 
 
+def caso_categoria_resto_nula(fallos):
+    """(13) La categoria NULL de QGIS es "todos los demas valores": en ArcMap
+    va al simbolo por defecto. Antes salia como clase "<Null>" y la entidad B
+    (sin categoria) no se dibujaba en ArcMap aunque QGIS si la pinta."""
+    lyr = _salida(u"categoria_resto_nula.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"categoria_resto_nula.qml"),
+                            SHP_POLIGONOS, lyr])
+    datos = _json_estricto(out, fallos)
+    if not datos or not datos.get("ok"):
+        fallos.append(u"no convirtio: %r / %s" % (datos, err[:300]))
+        return
+    rend = lyr_dump.dump_lyr(lyr).get("renderer") or {}
+    _igual(fallos, [c.get("valor") for c in rend.get("clases", [])], [u"A"],
+           u"clases (sin una clase <Null>)")
+    _igual(fallos, rend.get("usa_default"), True, u"usa el simbolo por defecto")
+    _igual(fallos, rend.get("default_label"), u"Todos los demas valores",
+           u"etiqueta del simbolo por defecto")
+    # poligonos.shp: A, B. QGIS pinta A en rojo y B con la categoria NULL.
+    _igual(fallos, _color_por_entidad(lyr), [u"#e41a1c", u"#999999"],
+           u"color que ArcMap da a cada entidad")
+
+
 # Batch sintetico: el .qgz lo escribio QGIS 3.44.12 con rutas RELATIVAS a los
 # datos de `tmp/regresion_qml/` (`tests/generar_fixtures_qgis.py`).
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
@@ -739,6 +795,7 @@ CASOS = [
     ("hexagono_equilatero", caso_hexagono_equilatero),
     ("categoria_oculta", caso_categoria_oculta),
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
+    ("categoria_resto_nula", caso_categoria_resto_nula),
     ("batch_sintetico", caso_batch_sintetico),
     ("batch_remap", caso_batch_remap),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
