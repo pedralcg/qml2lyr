@@ -1123,7 +1123,7 @@ def _limpiar_dir_tmp(dir_tmp, avisos):
 
 
 def emitir_qml(ruta_qml, ruta_dato, ruta_lyr_salida, nombre=None, dir_tmp=None,
-               defquery=None):
+               defquery=None, servicio=None):
     """Modo principal: un .qml (estilo de la capa viva) -> .lyr.
 
     Un .qml normal da una capa; un .qml rule-based da N (una .lyr por regla,
@@ -1132,12 +1132,18 @@ def emitir_qml(ruta_qml, ruta_dato, ruta_lyr_salida, nombre=None, dir_tmp=None,
     `defquery` es la definition query de la capa VIVA de QGIS
     (`QgsVectorLayer.subsetString()`): el .qml no la lleva, asi que la aporta
     el llamador. Si la capa es rule-based, acota a todas las reglas, igual que
-    hace `parse_maplayer` con la del .qgz."""
+    hace `parse_maplayer` con la del .qgz.
+
+    `servicio`: origen de datos de una capa WMS/WMTS viva (`layer.source()`);
+    entonces no hay `ruta_dato` y el .lyr es de servicio."""
     import parser_qgis
     dir_tmp, propio = _dir_tmp_por_defecto(dir_tmp)
     avisos_globales = []
     try:
-        capas = parser_qgis.parse_qml(ruta_qml)
+        if servicio:
+            capas = parser_qgis.parse_servicio_qml(ruta_qml, servicio)
+        else:
+            capas = parser_qgis.parse_qml(ruta_qml)
     except Exception as e:
         return {"ok": False, "modo": "qml", "entrada": ruta_qml,
                 "error": _texto_error(e), "tipo_error": type(e).__name__,
@@ -1585,17 +1591,26 @@ def _imprimir_json(obj):
     sys.stdout.write(texto.encode("utf-8") + "\n")
 
 
-_CLAVES_ARGS_JSON = ("qml", "dato", "salida", "nombre", "defquery", "dir_tmp")
+#: Claves de `--args-json` por modo: (obligatorias, opcionales). En el modo
+#: "qml" hace falta `dato` (capa de fichero) o `servicio` (el `source()` de
+#: una capa WMS/WMTS viva), uno de los dos.
+_CLAVES_ARGS_JSON = {
+    "qml": (("qml", "salida"),
+            ("dato", "servicio", "nombre", "defquery", "dir_tmp")),
+    "mxd": (("qgz", "salida"), ("plantilla", "remap", "dir_tmp")),
+}
 
 
 def _leer_args_json(ruta):
-    """Fichero JSON en UTF-8 con los argumentos del modo .qml.
+    """Fichero JSON en UTF-8 con los argumentos del emisor.
 
-    Es el modo que usa el plugin: asi ni los textos con tilde (que en py2.7
-    llegan a `sys.argv` en cp1252 y rompen el JSON de salida) ni la def-query
-    (llena de comillas) tienen que pasar por la linea de comandos.
+    Es la via del plugin: asi ni los textos con tilde (que en py2.7 llegan a
+    `sys.argv` en cp1252 y rompen el JSON de salida) ni la def-query (llena de
+    comillas) tienen que pasar por la linea de comandos.
 
-    Claves: qml, dato, salida (obligatorias) + nombre, defquery, dir_tmp.
+    Clave `modo`: "qml" (por defecto: una capa, ver `_CLAVES_ARGS_JSON`) o
+    "mxd" (el proyecto entero a un .mxd; `remap` es una lista de reglas
+    "ORIGEN=DESTINO").
     """
     f = open(ruta, "rb")
     try:
@@ -1604,17 +1619,30 @@ def _leer_args_json(ruta):
         f.close()
     if not isinstance(datos, dict):
         raise ValueError(u"%s no contiene un objeto JSON" % _u(ruta))
-    faltan = [k for k in ("qml", "dato", "salida") if not datos.get(k)]
+    modo = datos.pop("modo", "qml")
+    if modo not in _CLAVES_ARGS_JSON:
+        raise ValueError(u"modo '%s' desconocido en %s (validos: %s)"
+                         % (modo, _u(ruta), u", ".join(sorted(
+                             _CLAVES_ARGS_JSON))))
+    obligatorias, opcionales = _CLAVES_ARGS_JSON[modo]
+    faltan = [k for k in obligatorias if not datos.get(k)]
+    if modo == "qml" and not (datos.get("dato") or datos.get("servicio")):
+        faltan.append(u"dato o servicio")
     if faltan:
         raise ValueError(u"faltan claves obligatorias en %s: %s"
                          % (_u(ruta), u", ".join(faltan)))
-    sobran = [k for k in datos if k not in _CLAVES_ARGS_JSON]
+    if modo == "qml" and datos.get("dato") and datos.get("servicio"):
+        raise ValueError(u"%s lleva 'dato' y 'servicio': una capa es de "
+                         u"fichero o de servicio, no las dos" % _u(ruta))
+    sobran = [k for k in datos if k not in obligatorias + opcionales]
     if sobran:
         # Una clave de mas suele ser una errata (`def_query` por `defquery`):
         # ignorarla en silencio perderia la def-query sin que nadie lo note.
-        raise ValueError(u"claves no reconocidas en %s: %s (validas: %s)"
-                         % (_u(ruta), u", ".join(sorted(sobran)),
-                            u", ".join(_CLAVES_ARGS_JSON)))
+        raise ValueError(u"claves no reconocidas en %s: %s (validas en modo "
+                         u"%s: %s)" % (_u(ruta), u", ".join(sorted(sobran)),
+                                       modo, u", ".join(obligatorias +
+                                                        opcionales)))
+    datos["modo"] = modo
     return datos
 
 
@@ -1634,9 +1662,10 @@ def _main(argv):
                    help="modo --mxd: .mxd de partida (por defecto, ISO A3 "
                         "horizontal de ArcGIS)")
     p.add_argument("--args-json", dest="args_json", default=None,
-                   help="fichero JSON utf-8 con qml/dato/salida/nombre/"
-                        "defquery/dir_tmp (modo recomendado: evita la "
-                        "codepage de la linea de comandos)")
+                   help="fichero JSON utf-8 con los argumentos; modo 'qml' "
+                        "(qml, dato o servicio, salida...) o 'mxd' (qgz, "
+                        "salida, plantilla, remap). Es la via del plugin: "
+                        "evita la codepage de la linea de comandos")
     p.add_argument("--nombre", default=None,
                    help="nombre de la capa en el .lyr (modo .qml de una capa)")
     p.add_argument("--defquery", default=None,
@@ -1680,10 +1709,30 @@ def _main(argv):
                             "tipo_error": type(e).__name__,
                             "capas": [], "avisos": []})
             return 1
-        resultado = emitir_qml(datos["qml"], datos["dato"], datos["salida"],
+        if datos["modo"] == "mxd":
+            import parser_qgis
+            try:
+                reglas = [parser_qgis.parse_remap(r)
+                          for r in datos.get("remap") or []]
+            except ValueError as e:
+                _imprimir_json({"ok": False, "modo": "mxd",
+                                "entrada": datos["qgz"],
+                                "salida": datos["salida"],
+                                "error": _texto_error(e),
+                                "tipo_error": "ValueError", "capas": [],
+                                "omitidas": [], "avisos": []})
+                return 2
+            resultado = emitir_mxd(datos["qgz"], datos["salida"],
+                                   plantilla=datos.get("plantilla"),
+                                   remap=reglas, dir_tmp=datos.get("dir_tmp"))
+            _imprimir_json(resultado)
+            return 0 if resultado.get("ok") else 2
+        resultado = emitir_qml(datos["qml"], datos.get("dato"),
+                               datos["salida"],
                                nombre=datos.get("nombre"),
                                defquery=datos.get("defquery"),
-                               dir_tmp=datos.get("dir_tmp"))
+                               dir_tmp=datos.get("dir_tmp"),
+                               servicio=datos.get("servicio"))
         _imprimir_json(resultado)
         return 0 if resultado.get("ok") else 1
 

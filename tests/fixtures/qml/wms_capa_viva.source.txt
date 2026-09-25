@@ -1,0 +1,1 @@
+crs=EPSG:25830&format=image/png&layers=masas&layers=textos&styles&styles&url=http://127.0.0.1:8765/wms

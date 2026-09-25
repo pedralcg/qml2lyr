@@ -1689,9 +1689,16 @@ def _parametros_uri(datasource):
 
 
 def _servicio_wms(maplayer_elem, nombre, avisos):
-    """<maplayer> con proveedor `wms` -> ServicioWMS o ServicioWMTS (el mismo
-    proveedor de QGIS sirve los dos); SimbologiaNoSoportada si es un XYZ."""
-    pares = _parametros_uri(maplayer_elem.findtext("datasource"))
+    """<maplayer> con proveedor `wms` -> ServicioWMS o ServicioWMTS."""
+    return servicio_desde_datasource(maplayer_elem.findtext("datasource"),
+                                     nombre, avisos)
+
+
+def servicio_desde_datasource(datasource, nombre, avisos):
+    """Origen de datos del proveedor `wms` de QGIS (el `<datasource>` del
+    .qgs o el `layer.source()` de la capa viva) -> ServicioWMS o ServicioWMTS
+    (el mismo proveedor sirve los dos); SimbologiaNoSoportada si es un XYZ."""
+    pares = _parametros_uri(datasource)
     params = dict(pares)
     url = params.get(u"url")
     if params.get(u"type") == u"xyz":
@@ -1762,6 +1769,18 @@ def parse_qml(ruta_qml):
     cabecera = _cabecera_capa(raiz, avisos)
     capas = _capas_desde_estilo(raiz, None, avisos)
     return _aplicar_cabecera(capas, cabecera)
+
+
+def parse_servicio_qml(ruta_qml, datasource):
+    """Capa de servicio VIVA (la via del plugin): el .qml de `saveNamedStyle`
+    trae opacidad y escalas pero no el origen, que llega aparte (el
+    `layer.source()`). -> lista con una CapaEstilo con `servicio`."""
+    raiz = ET.parse(ruta_qml).getroot()
+    avisos = []
+    cabecera = _cabecera_capa(raiz, avisos)
+    capa = CapaEstilo(nombre=None, renderer=None, avisos=avisos)
+    capa.servicio = servicio_desde_datasource(datasource, None, avisos)
+    return _aplicar_cabecera([capa], cabecera)
 
 
 def _raiz_qgs(ruta_qgz):
