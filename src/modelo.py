@@ -282,6 +282,20 @@ class CapaEstilo(object):
         # avisos: degradaciones conscientes (p.ej. symbol-layers descartados).
         # Nunca silenciosas: el llamador las imprime o las devuelve en su JSON.
         self.avisos = avisos if avisos is not None else []
+        # Capa de servicio (WMS): ServicioWMS. Sin dato de fichero ni renderer.
+        self.servicio = None
+
+
+class ServicioWMS(object):
+    """Capa WMS de QGIS -> WMSMapLayer de ArcMap. No tiene renderer: el estilo
+    lo pone el servidor. Va en `CapaEstilo.servicio` y `renderer` queda None."""
+
+    def __init__(self, url, capas, estilos=None, formato=None, crs=None):
+        self.url = url
+        self.capas = capas          # nombres WMS de `layers=`, en su orden
+        self.estilos = estilos or []
+        self.formato = formato
+        self.crs = crs
 
 
 class SimbologiaNoSoportada(Exception):

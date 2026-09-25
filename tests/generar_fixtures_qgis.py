@@ -394,6 +394,39 @@ def qgz_batch_remap():
         subprocess.call(["subst", UNIDAD_REMAP, "/D"])
 
 
+def qgz_batch_wms():
+    """Capas WMS contra el servidor local de `wms_local.py` (sin red externa):
+    QGIS se conecta de verdad y escribe el datasource tal como lo guarda."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    servidor = wms_local.arrancar()
+    try:
+        proyecto = QgsProject.instance()
+        proyecto.clear()
+        casos = (("WMS dos hojas", ["parcelas", "textos"], 0.7),
+                 ("WMS grupo", ["catastro"], 1.0),
+                 ("WMS con una que falta", ["masas", "no_existe"], 1.0))
+        for nombre, capas, opacidad in casos:
+            uri = "crs=EPSG:25830&format=image/png&%s&%s&url=%s" % (
+                "&".join("layers=" + c for c in capas),
+                "&".join("styles" for _ in capas), wms_local.URL)
+            capa = QgsRasterLayer(uri, nombre, "wms")
+            if not capa.isValid():
+                sys.exit("capa WMS no valida: %s" % capa.error().summary())
+            capa.renderer().setOpacity(opacidad)
+            proyecto.addMapLayer(capa)
+        metadatos = proyecto.metadata()
+        metadatos.setAuthor("qml2lyr tests")
+        proyecto.setMetadata(metadatos)
+        salida = os.path.join(DIR_FIX, "batch_wms.qgz")
+        if not proyecto.write(salida):
+            sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+        proyecto.clear()
+        print("escrito", salida)
+    finally:
+        servidor.shutdown()
+
+
 # Nombre del fichero (sin extension) -> generador.
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
@@ -412,6 +445,7 @@ GENERADORES = {
     "categorizado_multicampo_barras": qml_categorizado_multicampo_barras,
     "batch_sintetico": qgz_batch_sintetico,
     "batch_remap": qgz_batch_remap,
+    "batch_wms": qgz_batch_wms,
 }
 
 

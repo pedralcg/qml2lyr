@@ -14,7 +14,7 @@ import sys
 sys.coinit_flags = 2
 import json
 
-from emisor import _init_arcobjects, _mods, _nobj, _qi
+from emisor import _init_arcobjects, _lib_path, _mods, _nobj, _qi
 
 # esriSimpleLineStyle
 _NOMBRE_ESTILO_LINEA = {0: "solid", 1: "dash", 2: "dot", 3: "dashdot",
@@ -283,6 +283,22 @@ def _dump_rampa(ramp):
     return {"tipo": "otra", "tamanyo": int(ramp.Size)}
 
 
+def _wms_encendidas(capa, visible_arriba):
+    """Nombres WMS de las hojas que se VEN: visibles ellas y todos sus padres.
+    Una hoja encendida bajo un grupo apagado no pinta nada."""
+    _, CA = _mods()
+    visible = visible_arriba and bool(capa.Visible)
+    hoja = _qi(capa, CA.IWMSLayer)
+    if hoja is not None:
+        return [hoja.WMSLayerDescription.Name] if visible else []
+    compuesta = _qi(capa, CA.ICompositeLayer)
+    nombres = []
+    if compuesta is not None:
+        for i in range(compuesta.Count):
+            nombres.extend(_wms_encendidas(compuesta.Layer[i], visible))
+    return nombres
+
+
 def dump_lyr(ruta_lyr):
     """Abre un .lyr y devuelve un dict canonico de su simbologia."""
     _init_arcobjects()
@@ -301,6 +317,17 @@ def dump_lyr(ruta_lyr):
             resultado["escala_min"] = float(layer.MinimumScale)
         if layer.MaximumScale:
             resultado["escala_max"] = float(layer.MaximumScale)
+        if _qi(layer, CA.IWMSMapLayer) is not None:
+            from comtypes.client import GetModule
+            GetModule(_lib_path() + "esriGISClient.olb")
+            import comtypes.gen.esriGISClient as GC
+            # La URL, de la conexion guardada: IWMSMapLayer.WMSServiceDescription
+            # no se deja leer desde comtypes.
+            conexion = _qi(layer, CA.IDataLayer).DataSourceName
+            props = _qi(conexion, GC.IWMSConnectionName).ConnectionProperties
+            resultado["wms"] = {"url": props.GetProperty(u"URL"),
+                                "encendidas": _wms_encendidas(layer, True)}
+            return resultado
         rl = _qi(layer, CA.IRasterLayer)
         if rl is not None:
             resultado["renderer"] = _dump_renderer_raster(rl.Renderer)

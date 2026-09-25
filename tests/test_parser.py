@@ -26,6 +26,7 @@ from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
 QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
+QGZ_WMS = os.path.join(RAIZ, "tests", "fixtures", "batch_wms.qgz")
 MM2PT = 2.834645669
 
 
@@ -254,6 +255,50 @@ def test_expresion_multicampo(fallos):
         if f(no) is not None:
             fallos.append(u"deberia seguir siendo expresion: %s -> %r"
                           % (no, f(no)))
+
+
+def test_wms(fallos):
+    """QGIS 3.44.12 (fixture contra el WMS local): url, layers= en orden,
+    opacidad del rasterrenderer. WMTS y XYZ se rechazan diciendo por que."""
+    capas = dict((ml.findtext("layername"), parser_qgis.parse_maplayer(ml)[0])
+                 for ml in parser_qgis._raiz_qgs(QGZ_WMS).iter("maplayer")
+                 if ml.findtext("layername"))
+    dos = capas[u"WMS dos hojas"]
+    _igual(fallos, dos.servicio.capas, [u"parcelas", u"textos"], u"layers=")
+    _igual(fallos, dos.servicio.url, u"http://127.0.0.1:8765/wms", u"url")
+    _igual(fallos, dos.opacidad, 0.7, u"opacidad")
+    _igual(fallos, dos.renderer, None, u"sin renderer")
+
+    import xml.etree.ElementTree as ET
+
+    def _capa(datasource):
+        ml = ET.Element("maplayer")
+        ET.SubElement(ml, "layername").text = u"x"
+        ET.SubElement(ml, "provider").text = u"wms"
+        ET.SubElement(ml, "datasource").text = datasource
+        return ml
+    # Datasource literal del WMTS del IGN en un proyecto real (2026-09-25).
+    wmts = (u"contextualWMSLegend=0&crs=EPSG:25830&dpiMode=7&featureCount=10&"
+            u"format=image/png&layers=MTN&styles=default&tileMatrixSet="
+            u"EPSG:25830&url=http://www.ign.es/wmts/mapa-raster")
+    try:
+        parser_qgis.parse_maplayer(_capa(wmts))
+        fallos.append(u"un WMTS deberia rechazarse")
+    except SimbologiaNoSoportada as e:
+        if u"wms-inspire/mapa-raster" not in unicode(e):
+            fallos.append(u"no propone el WMS del IGN: %s" % e)
+    try:
+        parser_qgis.parse_maplayer(_capa(
+            u"type=xyz&url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/%7By%7D.png"))
+        fallos.append(u"un XYZ deberia rechazarse")
+    except SimbologiaNoSoportada as e:
+        if u"XYZ" not in unicode(e):
+            fallos.append(u"mensaje del XYZ: %s" % e)
+    # Estilo no vacio: se avisa.
+    capa = parser_qgis.parse_maplayer(_capa(
+        u"format=image/png&layers=a&styles=raro&url=http://x/wms"))[0]
+    if not any(u"raro" in a for a in capa.avisos):
+        fallos.append(u"no avisa del estilo WMS: %s" % capa.avisos)
 
 
 def test_remap(fallos):

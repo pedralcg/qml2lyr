@@ -29,7 +29,12 @@ from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     RendererGraduado, RendererRasterValoresUnicos,
                     ClaseCorteRaster, RendererRasterCortes,
                     ParadaColor, RendererRasterEstirado, CapaEstilo,
-                    SimbologiaNoSoportada)
+                    ServicioWMS, SimbologiaNoSoportada)
+
+try:
+    from urllib import unquote as _unquote  # py2.7 (el motor)
+except ImportError:
+    from urllib.parse import unquote as _unquote  # py3
 
 _MM2PT = 2.834645669  # 1 mm = 2.834... puntos
 
@@ -1486,6 +1491,62 @@ def _aplicar_cabecera(capas, cabecera, datasource=None, defquery=None):
     return capas
 
 
+#: WMTS de los que se sabe que tienen un WMS que sirve lo mismo (comprobado
+#: a mano: 2026-09-25, IGN en el MXD de Majal Blanco). Solo se PROPONE en el
+#: mensaje: sustituir un servicio por otro en silencio no es convertir.
+_WMS_EQUIVALENTE = {
+    u"www.ign.es/wmts/mapa-raster": u"https://www.ign.es/wms-inspire/mapa-raster",
+}
+
+
+def _parametros_uri(datasource):
+    """URI de proveedor de QGIS (`clave=valor&clave=valor`) -> lista de pares,
+    en orden y con las claves repetidas (`layers=` y `styles=` lo son)."""
+    pares = []
+    for trozo in (datasource or u"").split(u"&"):
+        clave, _, valor = trozo.partition(u"=")
+        if clave:
+            pares.append((clave, _unquote(valor)))
+    return pares
+
+
+def _servicio_wms(maplayer_elem, nombre, avisos):
+    """<maplayer> con proveedor `wms` -> ServicioWMS, o SimbologiaNoSoportada
+    si es un WMTS o un XYZ (el mismo proveedor de QGIS sirve los tres)."""
+    pares = _parametros_uri(maplayer_elem.findtext("datasource"))
+    params = dict(pares)
+    url = params.get(u"url")
+    if params.get(u"type") == u"xyz":
+        raise SimbologiaNoSoportada(
+            u"'%s' es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
+            u"tipo de capa para ellas" % (nombre, url))
+    if u"tileMatrixSet" in params:
+        sin_esquema = re.sub(u"^https?://", u"", url or u"").rstrip(u"/")
+        wms = _WMS_EQUIVALENTE.get(sin_esquema)
+        propuesta = (u" El mismo servicio tiene WMS: %s (anadelo en QGIS como "
+                     u"WMS y vuelve a convertir)" % wms) if wms else u""
+        raise SimbologiaNoSoportada(
+            u"'%s' es un WMTS (%s): qml2lyr solo convierte WMS.%s"
+            % (nombre, url, propuesta))
+    if not url:
+        raise SimbologiaNoSoportada(u"capa WMS '%s' sin url= en el origen de "
+                                    u"datos" % nombre)
+    capas = [v for k, v in pares if k == u"layers" and v]
+    if not capas:
+        raise SimbologiaNoSoportada(u"capa WMS '%s' sin layers=: no se sabe "
+                                    u"que subcapas encender" % nombre)
+    estilos = [v for k, v in pares if k == u"styles"]
+    if any(estilos):
+        avisos.append(u"estilos WMS (%s) no trasladados: ArcMap pide cada "
+                      u"subcapa con su estilo por defecto"
+                      % u", ".join(e for e in estilos if e))
+    if params.get(u"authcfg") or params.get(u"username"):
+        avisos.append(u"el servicio usa credenciales en QGIS: el .lyr no las "
+                      u"lleva y ArcMap las pedira al conectar")
+    return ServicioWMS(url=url, capas=capas, estilos=estilos,
+                       formato=params.get(u"format"), crs=params.get(u"crs"))
+
+
 def parse_maplayer(maplayer_elem):
     """<maplayer> de un .qgs -> LISTA de CapaEstilo.
 
@@ -1494,6 +1555,10 @@ def parse_maplayer(maplayer_elem):
     """
     nombre = maplayer_elem.findtext("layername") or u"sin_nombre"
     avisos = []
+    if maplayer_elem.findtext("provider") == u"wms":
+        capa = CapaEstilo(nombre=nombre, renderer=None, avisos=avisos)
+        capa.servicio = _servicio_wms(maplayer_elem, nombre, avisos)
+        return _aplicar_cabecera([capa], _cabecera_capa(maplayer_elem, avisos))
     ruta, defquery_ds = _partir_datasource(
         maplayer_elem.findtext("datasource"), avisos)
     defquery = maplayer_elem.findtext("subsetstring") or defquery_ds or None

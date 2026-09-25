@@ -500,13 +500,117 @@ def _renderer_estirado(renderer_modelo, raster):
     return rr
 
 
+def _wms_hojas_pedidas(descripciones, pedidas, dentro, hojas, halladas):
+    """Expande los nombres de `layers=` a nombres de HOJA sobre el arbol de
+    descripciones del servicio (IWMSLayerDescription). QGIS puede pedir un
+    grupo por su nombre y eso enciende todo lo que cuelga de el.
+
+    El arbol de capas de ArcMap no sirve para esto: sus grupos no exponen el
+    nombre WMS (medido el 2026-09-25); las descripciones si."""
+    for d in descripciones:
+        pedida = d.Name in pedidas
+        if pedida:
+            halladas.add(d.Name)
+        hijos = [d.LayerDescription[j] for j in range(d.LayerDescriptionCount)]
+        if hijos:
+            _wms_hojas_pedidas(hijos, pedidas, dentro or pedida, hojas,
+                               halladas)
+        elif (dentro or pedida) and d.Name:
+            hojas.add(d.Name)
+
+
+def _wms_encender(capa, hojas, encendidas):
+    """Enciende las hojas de `hojas` (por su NOMBRE WMS, no por el titulo que
+    muestra ArcMap) y los grupos que las contienen; apaga todo lo demas. El
+    WMSMapLayer recien conectado trae las subcapas APAGADAS (medido el
+    2026-09-25) y encender solo el padre no pinta nada.
+    -> True si queda algo encendido en esta rama."""
+    _, CA = _mods()
+    hoja = _qi(capa, CA.IWMSLayer)
+    if hoja is not None:
+        nombre = hoja.WMSLayerDescription.Name
+        encendida = nombre in hojas
+        if encendida:
+            encendidas.append(nombre)
+    else:
+        encendida = False
+        compuesta = _qi(capa, CA.ICompositeLayer)
+        for i in range(compuesta.Count if compuesta is not None else 0):
+            encendida = _wms_encender(compuesta.Layer[i], hojas,
+                                      encendidas) or encendida
+    capa.Visible = encendida
+    return encendida
+
+
+def _emitir_wms(capa_estilo, ruta_lyr_salida):
+    """CapaEstilo con `servicio` -> .lyr con un WMSMapLayer conectado.
+
+    Receta probada en el MXD de Majal Blanco (2026-09-25): PropertySet con URL
+    -> WMSConnectionName -> IDataLayer.Connect. Necesita red: la conexion lee
+    el GetCapabilities del servidor."""
+    from comtypes.client import GetModule
+    GetModule(_lib_path() + "esriGISClient.olb")
+    import comtypes.gen.esriGISClient as GC
+    import comtypes.gen.esriSystem as S
+    _, CA = _mods()
+    servicio = capa_estilo.servicio
+    props = _nobj(S.PropertySet, S.IPropertySet)
+    props.SetProperty(u"URL", servicio.url)
+    conexion = _nobj(GC.WMSConnectionName, GC.IWMSConnectionName)
+    conexion.ConnectionProperties = props
+    wms = _nobj(CA.WMSMapLayer, CA.IWMSGroupLayer)
+    try:
+        _qi_exig(wms, CA.IDataLayer).Connect(_qi_exig(conexion, S.IName))
+    except Exception as e:
+        raise RuntimeError(u"no se pudo conectar al WMS %s (sin red, o el "
+                           u"servidor no responde a GetCapabilities): %s"
+                           % (servicio.url, _texto_error(e)))
+    capa = _qi_exig(wms, CA.ILayer)
+    desc = wms.WMSServiceDescription
+    hojas, halladas, encendidas = set(), set(), []
+    _wms_hojas_pedidas([desc.LayerDescription[i]
+                        for i in range(desc.LayerDescriptionCount)],
+                       set(servicio.capas), False, hojas, halladas)
+    _wms_encender(capa, hojas, encendidas)
+    faltan = [c for c in servicio.capas if c not in halladas]
+    if not encendidas:
+        raise SimbologiaNoSoportada(
+            u"ninguna de las subcapas pedidas (%s) esta en el WMS %s"
+            % (u", ".join(servicio.capas), servicio.url))
+    if faltan:
+        capa_estilo.avisos.append(
+            u"subcapas que QGIS pide y el WMS ya no ofrece: %s"
+            % u", ".join(faltan))
+    capa.Visible = True
+    if capa_estilo.nombre:
+        capa.Name = capa_estilo.nombre
+    if abs(capa_estilo.opacidad - 1.0) > 1e-6:
+        _qi_exig(capa, CA.ILayerEffects).Transparency = int(
+            round((1.0 - capa_estilo.opacidad) * 100))
+    if capa_estilo.escala_min:
+        capa.MinimumScale = float(capa_estilo.escala_min)
+    if capa_estilo.escala_max:
+        capa.MaximumScale = float(capa_estilo.escala_max)
+    if os.path.exists(ruta_lyr_salida):
+        os.remove(ruta_lyr_salida)
+    fichero = _nobj(CA.LayerFile, CA.ILayerFile)
+    fichero.New(ruta_lyr_salida)
+    fichero.ReplaceContents(capa)
+    fichero.Save()
+    fichero.Close()
+    return ruta_lyr_salida
+
+
 def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
     """Genera un .lyr desde una CapaEstilo del modelo.
 
     ruta_dato: shapefile o raster fuente (absoluto). La resolucion de
     datasources relativos del .qgs es responsabilidad del llamador (fase F4).
+    Una capa de servicio (WMS) no tiene dato: `ruta_dato` se ignora.
     """
     _init_arcobjects()
+    if getattr(capa_estilo, "servicio", None) is not None:
+        return _emitir_wms(capa_estilo, ruta_lyr_salida)
     import arcpy
     _, CA = _mods()
 
@@ -870,6 +974,13 @@ def emitir_qgz(ruta_qgz, dir_salida, dir_tmp=None, remap=None):
                                "tipo_error": type(e).__name__, "avisos": []})
             continue
         for capa in capas:
+            if capa.servicio is not None:
+                etiqueta = _nombre_unico(
+                    _nombre_fichero(capa.nombre or nombre_capa), usados)
+                resultados.append(_emitir_capa_segura(
+                    capa, None, os.path.join(dir_salida, etiqueta + u".lyr"),
+                    dir_tmp))
+                continue
             ruta_dato = _resolver_datasource(capa.datasource, dir_proyecto)
             ruta_lectura, regla = parser_qgis.remapear(ruta_dato, remap)
             if not ruta_lectura or not _existe_dataset(ruta_lectura):

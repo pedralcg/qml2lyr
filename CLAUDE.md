@@ -128,6 +128,8 @@ nulos que QGIS convierte en `''` se emiten además como `<Null>` y `' '`,
 agrupados con `AddReferenceValue` (`parser_qgis._expresion_multicampo`).
 Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
+Servicios: **WMS** en `--batch` (`CapaEstilo.servicio`, sin renderer) → `.lyr` con
+`WMSMapLayer`; WMTS y XYZ se rechazan.
 
 ## Gotchas críticos (no redescubrir)
 
@@ -248,6 +250,14 @@ RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
   `<rasterrenderer>` y oculta valores sueltos al margen de la paleta. ArcMap no
   tiene transparencia por clase: el 100% se reproduce con símbolo nulo y lo demás
   se avisa.
+- **WMS**: el `WMSMapLayer` conectado trae **todas las subcapas apagadas**. Los
+  grupos del árbol de capas **no exponen su nombre WMS**; se resuelve sobre las
+  descripciones del servicio (`IWMSGroupLayer.WMSServiceDescription` →
+  `LayerDescription[i]`), que sí lo tienen. `IWMSMapLayer.WMSServiceDescription`
+  **no se deja leer desde comtypes** (AttributeError): usar la de
+  `IWMSGroupLayer`. La URL guardada se lee de `IDataLayer.DataSourceName` →
+  `IWMSConnectionName.ConnectionProperties`. Abrir un `.lyr` WMS **reconecta**:
+  el test mantiene vivo el WMS local (`tests/wms_local.py`) mientras vuelca.
 - **Estadísticas del ráster**: `CalculateStatistics` reescribe los sidecars
   `.aux.xml` en cada pasada (resync inútil en una carpeta sincronizada). Se
   calcula solo si `GetRasterProperties` falla.

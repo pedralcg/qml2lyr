@@ -42,7 +42,18 @@ No se convierten y así se decidió en el kickoff / ADR-001:
 
 El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
 
-- **Capas de memoria, PostGIS, WMS/WFS**: sin fichero → no convertibles.
+- **Capas de memoria, PostGIS, WFS**: sin fichero → no convertibles.
+- **WMS** (solo modo `--batch`, desde 2026-09-25): sale un `.lyr` de servicio
+  (`WMSMapLayer`) con **encendidas solo las subcapas que QGIS pide en
+  `layers=`** (o todo lo que cuelga de un grupo pedido); el resto, apagado. Se
+  casa por el **nombre** WMS, no por el título que muestra ArcMap. Viajan la
+  opacidad y las escalas. No viajan: el **orden** de `layers=` (ArcMap pinta en
+  el orden del servicio), los **estilos** WMS (se avisa) ni las credenciales (se
+  avisa). Convertir **necesita red**: la conexión lee el `GetCapabilities`.
+  Una subcapa que el servicio ya no ofrece se avisa; si no queda ninguna, la
+  capa falla.
+- **WMTS y teselas XYZ**: se rechazan diciendo qué son. Para el WMTS del IGN
+  (`mapa-raster`) el mensaje propone su WMS equivalente, sin sustituirlo.
 - **GeoPackage**: **sí se convierte** desde 2026-09-20. arcpy 10.5 abre la capa
   como `ruta.gpkg\main.<layername>` (verificado con `MakeFeatureLayer` y con una
   emisión completa a `.lyr`). Requisito: que el origen de la capa en QGIS diga

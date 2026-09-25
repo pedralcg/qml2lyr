@@ -791,6 +791,60 @@ def caso_batch_remap(fallos):
         fallos.append(u"--remap fuera de --batch deberia rechazarse")
 
 
+QGZ_WMS = os.path.join(RAIZ, "tests", "fixtures", "batch_wms.qgz")
+
+
+def caso_batch_wms(fallos):
+    """(15) Capas WMS de QGIS -> .lyr de servicio con las subcapas de
+    `layers=` encendidas (y nada mas), contra el WMS local de los tests."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    salida = os.path.join(DIR_OUT, "wms")
+    if os.path.isdir(salida):
+        shutil.rmtree(salida)
+    # Vivo durante todo el caso: al reabrir el .lyr para volcarlo, ArcObjects
+    # se vuelve a conectar al servicio.
+    servidor = wms_local.arrancar()
+    try:
+        _caso_batch_wms(fallos, salida, wms_local)
+    finally:
+        servidor.shutdown()
+
+
+def _caso_batch_wms(fallos, salida, wms_local):
+    rc, out, err = _lanzar([u"--batch", QGZ_WMS, salida])
+    datos = _json_estricto(out, fallos)
+    if datos is None:
+        fallos.append(u"stderr: %s" % err.decode("utf-8", "replace")[:400])
+        return
+    _igual(fallos, datos.get("resumen"), {u"ok": 3, u"error": 0, u"total": 3},
+           u"resumen")
+    por_nombre = dict((c.get("nombre"), c) for c in datos.get("capas") or [])
+    esperadas = {u"WMS dos hojas": [u"textos", u"parcelas"],
+                 u"WMS grupo": [u"textos", u"masas", u"parcelas"],
+                 u"WMS con una que falta": [u"masas"]}
+    for nombre, encendidas in sorted(esperadas.items()):
+        capa = por_nombre.get(nombre) or {}
+        if not capa.get("ok"):
+            fallos.append(u"'%s' no salio: %r" % (nombre, capa))
+            continue
+        volcado = lyr_dump.dump_lyr(capa["salida"])
+        wms = volcado.get("wms") or {}
+        # Orden de ArcMap: el inverso de GetCapabilities (arriba lo que se
+        # dibuja encima).
+        _igual(fallos, wms.get("encendidas"), encendidas,
+               u"subcapas encendidas de '%s'" % nombre)
+        if wms_local.URL not in (wms.get("url") or u""):
+            fallos.append(u"url de '%s': %r" % (nombre, wms.get("url")))
+    _igual(fallos, lyr_dump.dump_lyr(
+        por_nombre[u"WMS dos hojas"]["salida"]).get("transparencia_pct"), 30,
+        u"transparencia de 'WMS dos hojas'")
+    avisos = (por_nombre.get(u"WMS con una que falta") or {}).get("avisos") or []
+    if not any(u"no_existe" in a for a in avisos):
+        fallos.append(u"no avisa de la subcapa que falta: %r" % avisos)
+
+
 def caso_parser_sin_arcobjects(fallos):
     """(8) Lo que se puede comprobar sin ArcObjects: campos unicode, mensajes
     neutros y resolucion de rutas multicapa."""
@@ -875,6 +929,7 @@ CASOS = [
     ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),
     ("batch_remap", caso_batch_remap),
+    ("batch_wms", caso_batch_wms),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
 
