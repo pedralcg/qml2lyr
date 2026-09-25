@@ -242,6 +242,40 @@ def qml_categoria_resto_nula():
     _guardar_qml(capa, "categoria_resto_nula.qml")
 
 
+def _categorizado_nulos(expresion, categorias, nombre_fichero):
+    capa = QgsVectorLayer(os.path.join(DIR_DATOS, "nulos.gdb")
+                          + "|layername=cuadros", "Nulos", "ogr")
+    if not capa.isValid():
+        sys.exit("nulos.gdb no valida (corre antes run_regresion_qml.py)")
+    capa.setRenderer(QgsCategorizedSymbolRenderer(expresion, [
+        QgsRendererCategory(valor, _relleno(color, 0.26), etiqueta)
+        for valor, color, etiqueta in categorias]))
+    _guardar_qml(capa, nombre_fichero)
+
+
+def qml_categorizado_multicampo():
+    """concat(coalesce(G,''), ', ', coalesce(R,'')): QGIS convierte los nulos
+    en '' dentro del valor. Categorias con un componente vacio."""
+    _categorizado_nulos(
+        "concat(coalesce(\"G\",''), ', ', coalesce(\"R\",''))",
+        [("1, Forestal MUP", "#e41a1c", "1, Forestal MUP"),
+         ("1, ", "#4daf4a", "Grupo 1 sin red"),
+         (", Rural", "#377eb8", "Rural sin grupo"),
+         (None, "#999999", "Todos los demas valores")],
+        "categorizado_multicampo.qml")
+
+
+def qml_categorizado_multicampo_barras():
+    """"G" || ', ' || "R" sin coalesce: un nulo anula el valor entero y la
+    entidad cae en "todos los demas"."""
+    _categorizado_nulos(
+        "\"G\" || ', ' || \"R\"",
+        [("1, Forestal MUP", "#e41a1c", "1, Forestal MUP"),
+         ("1, ", "#4daf4a", "Grupo 1 sin red"),
+         (None, "#999999", "Todos los demas valores")],
+        "categorizado_multicampo_barras.qml")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -374,6 +408,8 @@ GENERADORES = {
     "categoria_oculta_no_soportada": qml_categoria_oculta_no_soportada,
     "reglas_avisos_por_regla": qml_reglas_avisos_por_regla,
     "categoria_resto_nula": qml_categoria_resto_nula,
+    "categorizado_multicampo": qml_categorizado_multicampo,
+    "categorizado_multicampo_barras": qml_categorizado_multicampo_barras,
     "batch_sintetico": qgz_batch_sintetico,
     "batch_remap": qgz_batch_remap,
 }

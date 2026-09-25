@@ -340,9 +340,15 @@ def _renderer(renderer_modelo):
         r.FieldCount = len(renderer_modelo.campos)
         for i, campo in enumerate(renderer_modelo.campos):
             r.Field[i] = campo
+        if renderer_modelo.separador is not None:
+            r.FieldDelimiter = renderer_modelo.separador
         for clase in renderer_modelo.clases:
             r.AddValue(clase.valor, "", _simbolo(clase.simbolo))
             r.Label[clase.valor] = clase.label
+            for variante in clase.variantes:
+                # Agrupa el valor bajo la clase: mismo simbolo, una sola
+                # entrada de leyenda (el "agrupar valores" de ArcMap).
+                r.AddReferenceValue(variante, clase.valor)
         if renderer_modelo.default_simbolo is not None:
             r.DefaultSymbol = _simbolo(renderer_modelo.default_simbolo)
             r.UseDefaultSymbol = True

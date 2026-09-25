@@ -39,6 +39,13 @@ SHP_PUNTOS = os.path.join(DIR_DATOS, "puntos.shp")
 RASTER = os.path.join(DIR_DATOS, "paleta.tif")
 GPKG = os.path.join(DIR_DATOS, "zonas.gpkg")
 GPKG_CAPA = GPKG + u"\\main.zonas"
+# Dos campos de texto con nulos: G y R. En la geodatabase son NULL de verdad;
+# el shapefile no los guarda y lleva '' (ArcMap lo lee ' ', QGIS NULL).
+FILAS_NULOS = [(u"1", u"Forestal MUP"), (u"1", u""), (u"1", None),
+               (None, u"Rural"), (None, None), (u"9", u"Otro")]
+GDB_NULOS = os.path.join(DIR_DATOS, "nulos.gdb")
+FC_NULOS = os.path.join(GDB_NULOS, "cuadros")
+SHP_NULOS = os.path.join(DIR_DATOS, "cuadros_nulos.shp")
 
 # Nombre y ruta con tilde: es lo que reventaba el contrato del subproceso.
 NOMBRE_TILDE = u"Vías pecuarias"
@@ -97,6 +104,30 @@ def _preparar_datos():
         ras.save(RASTER)
         arcpy.DefineProjection_management(RASTER, sr)
         arcpy.CalculateStatistics_management(RASTER)
+
+    for ws, nombre, ruta in ((GDB_NULOS, "cuadros", FC_NULOS),
+                             (DIR_DATOS, "cuadros_nulos.shp", SHP_NULOS)):
+        if ws == GDB_NULOS and not arcpy.Exists(GDB_NULOS):
+            arcpy.CreateFileGDB_management(DIR_DATOS, "nulos.gdb")
+        if arcpy.Exists(ruta):
+            continue
+        arcpy.CreateFeatureclass_management(ws, nombre, "POLYGON",
+                                            spatial_reference=sr)
+        for campo in ("G", "R"):
+            arcpy.AddField_management(ruta, campo, "TEXT", field_length=20,
+                                      field_is_nullable="NULLABLE")
+        es_shp = ruta.endswith(".shp")
+        cur = arcpy.da.InsertCursor(ruta, ["SHAPE@", "G", "R"])
+        for i, (g, r) in enumerate(FILAS_NULOS):
+            x = 600000 + i * 200
+            anillo = arcpy.Array([arcpy.Point(x, 4200000),
+                                  arcpy.Point(x + 100, 4200000),
+                                  arcpy.Point(x + 100, 4200100),
+                                  arcpy.Point(x, 4200100)])
+            if es_shp:
+                g, r = g or u"", r or u""
+            cur.insertRow([arcpy.Polygon(anillo, sr), g, r])
+        del cur
 
     if not os.path.exists(GPKG):
         # GeoPackage sintetico: es el contenedor multicapa que el plugin
@@ -165,7 +196,7 @@ def _salida(nombre):
 
 
 def _color_por_entidad(ruta_lyr):
-    """Color de relleno (#rrggbb) que el renderer del .lyr da a cada entidad,
+    """Color (#rrggbb) que el renderer del .lyr da a cada entidad,
     en orden de OID; None si no la dibuja.
 
     Usa IFeatureRenderer.SymbolByFeature, que es lo que llama Draw: mide que
@@ -190,7 +221,10 @@ def _color_por_entidad(ruta_lyr):
         if not simbolo:
             colores.append(None)
         else:
-            bgr = emisor._qi_exig(simbolo, D.IFillSymbol).Color.RGB
+            con_color = (emisor._qi(simbolo, D.IFillSymbol)
+                         or emisor._qi(simbolo, D.ILineSymbol)
+                         or emisor._qi_exig(simbolo, D.IMarkerSymbol))
+            bgr = con_color.Color.RGB
             colores.append(u"#%02x%02x%02x" % (bgr & 0xFF, (bgr >> 8) & 0xFF,
                                                (bgr >> 16) & 0xFF))
         entidad = cursor.NextFeature()
@@ -575,6 +609,48 @@ def caso_categoria_resto_nula(fallos):
            u"color que ArcMap da a cada entidad")
 
 
+# Color que QGIS 3.44.12 da a cada entidad de FILAS_NULOS con cada fixture,
+# leido con symbolForFeature sobre los mismos datos (2026-09-25). ArcMap tiene
+# que dar lo mismo. Con `||` un nulo anula el valor entero, y en el shapefile
+# QGIS lee '' como NULL: por eso la fila 2 cambia entre gdb y shp.
+_ROJO, _VERDE, _AZUL, _GRIS = u"#e41a1c", u"#4daf4a", u"#377eb8", u"#999999"
+COLORES_QGIS_MULTICAMPO = {
+    (u"categorizado_multicampo", u"gdb"): [_ROJO, _VERDE, _VERDE, _AZUL, _GRIS, _GRIS],
+    (u"categorizado_multicampo", u"shp"): [_ROJO, _VERDE, _VERDE, _AZUL, _GRIS, _GRIS],
+    (u"categorizado_multicampo_barras", u"gdb"): [_ROJO, _VERDE, _GRIS, _GRIS, _GRIS, _GRIS],
+    (u"categorizado_multicampo_barras", u"shp"): [_ROJO, _GRIS, _GRIS, _GRIS, _GRIS, _GRIS],
+}
+
+
+def caso_categorizado_multicampo(fallos):
+    """(14) Categorizado por concat de dos campos -> valores unicos de ArcMap de
+    2 campos con separador. Cada entidad tiene que recibir en ArcMap el mismo
+    color que en QGIS, tambien las que tienen nulos (geodatabase) o vacios
+    (shapefile)."""
+    for (qml, tipo), esperado in sorted(COLORES_QGIS_MULTICAMPO.items()):
+        dato = FC_NULOS if tipo == u"gdb" else SHP_NULOS
+        lyr = _salida(u"%s_%s.lyr" % (qml, tipo))
+        rc, out, err = _lanzar([os.path.join(DIR_QML, qml + u".qml"), dato, lyr])
+        datos = _json_estricto(out, fallos)
+        if not datos or not datos.get("ok"):
+            fallos.append(u"%s sobre %s no convirtio: %r / %s"
+                          % (qml, tipo, datos, err[:300]))
+            continue
+        rend = lyr_dump.dump_lyr(lyr).get("renderer") or {}
+        _igual(fallos, rend.get("campos"), [u"G", u"R"], u"campos de %s" % qml)
+        _igual(fallos, rend.get("separador"), u", ", u"separador de %s" % qml)
+        _igual(fallos, _color_por_entidad(lyr), esperado,
+               u"color por entidad de %s sobre %s" % (qml, tipo))
+        if qml == u"categorizado_multicampo":
+            agrupados = sorted((c["valor"], c["referencia"])
+                               for c in rend.get("clases", [])
+                               if "referencia" in c)
+            _igual(fallos, agrupados,
+                   [(u" , Rural", u", Rural"), (u"1,  ", u"1, "),
+                    (u"1, <Null>", u"1, "), (u"<Null>, Rural", u", Rural")],
+                   u"variantes de nulo agrupadas bajo su clase")
+
+
 # Batch sintetico: el .qgz lo escribio QGIS 3.44.12 con rutas RELATIVAS a los
 # datos de `tmp/regresion_qml/` (`tests/generar_fixtures_qgis.py`).
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
@@ -796,6 +872,7 @@ CASOS = [
     ("categoria_oculta", caso_categoria_oculta),
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
     ("categoria_resto_nula", caso_categoria_resto_nula),
+    ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),
     ("batch_remap", caso_batch_remap),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),

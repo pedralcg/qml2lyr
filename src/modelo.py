@@ -143,10 +143,13 @@ class RendererSimple(object):
 class ClaseValor(object):
     """Una categoria de un renderer de valores unicos."""
 
-    def __init__(self, valor, label, simbolo):
+    def __init__(self, valor, label, simbolo, variantes=None):
         self.valor = valor
         self.label = label
         self.simbolo = simbolo
+        # Otros valores que ArcMap debe agrupar bajo esta clase (una sola
+        # entrada de leyenda): los nulos de un valor compuesto de varios campos.
+        self.variantes = variantes or []
 
 
 class RendererValoresUnicos(object):
@@ -156,11 +159,14 @@ class RendererValoresUnicos(object):
     se traduce al simbolo por defecto del renderer de ArcMap.
     """
 
-    def __init__(self, campos, clases, default_simbolo=None, default_label=u""):
+    def __init__(self, campos, clases, default_simbolo=None, default_label=u"",
+                 separador=None):
         self.campos = campos
         self.clases = clases
         self.default_simbolo = default_simbolo
         self.default_label = default_label
+        # FieldDelimiter de ArcMap cuando hay varios campos.
+        self.separador = separador
 
 
 class ClaseRango(object):

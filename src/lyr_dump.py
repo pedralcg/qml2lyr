@@ -157,13 +157,22 @@ def _dump_valores_unicos(uv):
     clases = []
     for i in range(uv.ValueCount):
         valor = uv.Value[i]
-        clases.append({"valor": valor,
-                       "label": uv.Label[valor] or u"",
-                       "simbolo": _dump_simbolo(uv.Symbol[valor])})
+        clase = {"valor": valor,
+                 "label": uv.Label[valor] or u"",
+                 "simbolo": _dump_simbolo(uv.Symbol[valor])}
+        try:
+            # Solo existe para un valor agrupado bajo otro (AddReferenceValue);
+            # para uno propio, ArcObjects da E_INVALIDARG.
+            clase["referencia"] = uv.ReferenceValue[valor]
+        except Exception:
+            pass
+        clases.append(clase)
     d = {"tipo": "valores_unicos",
          "campos": campos,
          "clases": clases,
          "usa_default": bool(uv.UseDefaultSymbol)}
+    if len(campos) > 1:
+        d["separador"] = uv.FieldDelimiter
     if d["usa_default"]:
         d["default_label"] = uv.DefaultLabel or u""
         d["default_simbolo"] = _dump_simbolo(uv.DefaultSymbol)

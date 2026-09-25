@@ -122,6 +122,10 @@ cualquiera de las dos falte.
 Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / multicapa / línea
 (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) / marcador (5 formas simples
 + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por escala.
+Categorizado por concatenación de 2-3 campos (`concat`/`||`, con o sin
+`coalesce(campo,'')`) → valores únicos multicampo con `FieldDelimiter`; los
+nulos que QGIS convierte en `''` se emiten además como `<Null>` y `' '`,
+agrupados con `AddReferenceValue` (`parser_qgis._expresion_multicampo`).
 Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
 

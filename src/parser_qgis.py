@@ -614,6 +614,133 @@ def _campo(attr, que=u"renderer"):
     return attr
 
 
+#: Campos que ArcMap admite en un valor unico compuesto y que se traducen.
+_MAX_CAMPOS_MULTI = 3
+
+
+def _partir_nivel_superior(texto, sep):
+    """Parte `texto` por `sep` fuera de comillas ('..' y "..") y parentesis."""
+    trozos, actual, prof, comilla, i = [], [], 0, None, 0
+    while i < len(texto):
+        c = texto[i]
+        if comilla:
+            actual.append(c)
+            if c == comilla:
+                # '' y "" dentro de una cadena son la comilla escapada.
+                if texto[i + 1:i + 2] == comilla:
+                    actual.append(comilla)
+                    i += 1
+                else:
+                    comilla = None
+        elif c in u"'\"":
+            comilla = c
+            actual.append(c)
+        elif c == u"(":
+            prof += 1
+            actual.append(c)
+        elif c == u")":
+            prof -= 1
+            actual.append(c)
+        elif prof == 0 and texto.startswith(sep, i):
+            trozos.append(u"".join(actual).strip())
+            actual = []
+            i += len(sep)
+            continue
+        else:
+            actual.append(c)
+        i += 1
+    trozos.append(u"".join(actual).strip())
+    return trozos
+
+
+_RE_LITERAL = re.compile(ur"^'((?:[^']|'')*)'$")
+_RE_COALESCE = re.compile(ur"^coalesce\s*\((.*)\)$", re.IGNORECASE)
+
+
+def _termino_concat(termino):
+    """Un termino de la concatenacion -> ('campo', nombre, nulo_vacio) o
+    ('literal', texto, None); None si no es ninguno de los dos."""
+    m = _RE_LITERAL.match(termino)
+    if m:
+        return (u"literal", m.group(1).replace(u"''", u"'"), None)
+    m = _RE_COALESCE.match(termino)
+    if m:
+        args = _partir_nivel_superior(m.group(1), u",")
+        if len(args) == 2 and args[1] == u"''":
+            campo = _termino_concat(args[0])
+            if campo and campo[0] == u"campo":
+                return (u"campo", campo[1], True)
+        return None
+    try:
+        return (u"campo", _campo(termino), False)
+    except SimbologiaNoSoportada:
+        return None
+
+
+def _expresion_multicampo(attr):
+    """Categorizado por `concat(A, 'sep', B[, 'sep', C])` o `A || 'sep' || B`
+    -> (campos, separador, nulo_vacio por campo); None si no es ese patron.
+
+    Es el equivalente de un UniqueValueRenderer de ArcMap de 2-3 campos con
+    FieldDelimiter. Solo campos (o `coalesce(campo, '')`) alternando con UN
+    MISMO separador literal no vacio; cualquier otra cosa sigue siendo una
+    expresion que ArcMap no sabe evaluar.
+
+    `nulo_vacio[i]` dice si QGIS convierte el nulo del campo i en '' dentro
+    del valor: siempre con concat() (convierte los NULL en cadena vacia) y con
+    coalesce(campo, ''). Con `||` sin coalesce, un nulo anula el valor entero
+    y la entidad cae en "todos los demas" (medido en QGIS 3.44.12)."""
+    attr = (attr or u"").strip()
+    if isinstance(attr, bytes):
+        attr = attr.decode("utf-8")
+    m = re.match(ur"^concat\s*\((.*)\)$", attr, re.IGNORECASE | re.DOTALL)
+    if m:
+        terminos, con_concat = _partir_nivel_superior(m.group(1), u","), True
+    else:
+        terminos, con_concat = _partir_nivel_superior(attr, u"||"), False
+    if len(terminos) < 3 or len(terminos) % 2 == 0:
+        return None
+    analizados = [_termino_concat(t) for t in terminos]
+    if None in analizados:
+        return None
+    campos = analizados[0::2]
+    seps = analizados[1::2]
+    if any(t[0] != u"campo" for t in campos) or \
+            any(t[0] != u"literal" for t in seps):
+        return None
+    separadores = set(t[1] for t in seps)
+    if len(separadores) != 1 or not seps[0][1] or \
+            len(campos) > _MAX_CAMPOS_MULTI:
+        return None
+    return ([t[1] for t in campos], seps[0][1],
+            [con_concat or t[2] for t in campos])
+
+
+def _variantes_nulas(valor, separador, nulo_vacio):
+    """Valores con los que ArcMap compone lo que QGIS ve como `valor`.
+
+    QGIS convierte el nulo en '' (concat / coalesce), y ArcMap no: medido con
+    SymbolByFeature el 2026-09-25, un componente nulo sale "<Null>" en una
+    geodatabase y un texto vacio de shapefile sale ' ' (un espacio). Cada
+    componente vacio de un campo con `nulo_vacio` genera esas dos variantes.
+    Si el valor no se parte en tantos trozos como campos (un campo con el
+    separador dentro), no se generan: no se sabe que trozo es cual."""
+    partes = valor.split(separador)
+    if len(partes) != len(nulo_vacio):
+        return []
+    opciones = []
+    for parte, nv in zip(partes, nulo_vacio):
+        if parte == u"" and nv:
+            opciones.append([u"", _VALOR_NULO_ARCMAP, u" "])
+        else:
+            opciones.append([parte])
+    combinados = [u""]
+    for i, alternativas in enumerate(opciones):
+        combinados = [c + (separador if i else u"") + a
+                      for c in combinados for a in alternativas]
+    return [c for c in combinados if c != valor]
+
+
 def _simbolos_visibles(contenedor, etiqueta):
     """Nombres de simbolo de las clases que QGIS SI dibuja (render != false)."""
     return set(e.get("symbol") for e in contenedor.findall(etiqueta)
@@ -621,7 +748,17 @@ def _simbolos_visibles(contenedor, etiqueta):
 
 
 def _renderer_categorizado(rend_elem, avisos):
-    campo = _campo(rend_elem.get("attr"), u"renderer categorizado")
+    multi = _expresion_multicampo(rend_elem.get("attr"))
+    if multi:
+        campos, separador, nulo_vacio = multi
+        avisos.append(
+            u"categorizado por la expresion '%s': se emite como valores unicos "
+            u"de %d campos (%s) con separador '%s'"
+            % (rend_elem.get("attr"), len(campos), u", ".join(campos),
+               separador))
+    else:
+        campos = [_campo(rend_elem.get("attr"), u"renderer categorizado")]
+        separador, nulo_vacio = None, None
     clases, default_simbolo, default_label = [], None, u""
 
     cats = rend_elem.find("categories")
@@ -682,9 +819,34 @@ def _renderer_categorizado(rend_elem, avisos):
 
     if not clases:
         raise SimbologiaNoSoportada(u"categorizado sin clases con valor")
-    return RendererValoresUnicos(campos=[campo], clases=clases,
+    if multi:
+        _anadir_variantes_nulas(clases, separador, nulo_vacio, avisos)
+    return RendererValoresUnicos(campos=campos, clases=clases,
                                  default_simbolo=default_simbolo,
-                                 default_label=default_label)
+                                 default_label=default_label,
+                                 separador=separador)
+
+
+def _anadir_variantes_nulas(clases, separador, nulo_vacio, avisos):
+    """Cuelga de cada clase los valores con que ArcMap escribe sus nulos
+    (`_variantes_nulas`). Una variante que ya es el valor de otra clase no se
+    anade: en QGIS esa otra clase es la que manda para ese valor."""
+    explicitos = set(c.valor for c in clases)
+    for clase in clases:
+        variantes = [v for v in _variantes_nulas(clase.valor, separador,
+                                                 nulo_vacio)
+                     if v not in explicitos]
+        if not variantes:
+            continue
+        clase.variantes = variantes
+        explicitos.update(variantes)
+        avisos.append(
+            u"categoria '%s' con un campo vacio: en QGIS casa tambien el nulo, "
+            u"asi que en ArcMap agrupa ademas %s (nulo de geodatabase y texto "
+            u"vacio de shapefile). Si ese campo es NUMERICO en un shapefile, "
+            u"ArcMap lee su nulo como 0 y esas entidades no casaran"
+            % (clase.label or clase.valor,
+               u", ".join(u"'%s'" % v for v in variantes)))
 
 
 def _renderer_graduado(rend_elem, avisos):

@@ -22,6 +22,21 @@ No se convierten y así se decidió en el kickoff / ADR-001:
 - **Clasificación por expresión** (un `renderer-v2` cuyo `attr` no es un nombre
   de campo): se rechaza con mensaje explícito. Sí se aceptan nombres de campo
   con tilde o ñ (`"Año"`, `Señal_2`).
+  **Excepción (2026-09-25): la concatenación de 2 o 3 campos** en un
+  categorizado — `concat("A", ', ', "B")`, `"A" || ' - ' || "B"`, con o sin
+  `coalesce(campo, '')` — se traduce a los **valores únicos de varios campos**
+  de ArcMap, con el separador como `FieldDelimiter`. Un solo separador, el
+  mismo entre todos los campos y no vacío; cualquier otra expresión se sigue
+  rechazando.
+  - **Nulos**: con `concat()` o `coalesce(campo, '')` QGIS convierte el nulo en
+    cadena vacía (`1, `); ArcMap escribe `1, <Null>` en una geodatabase y `1,  `
+    (un espacio) con el texto vacío de un shapefile. Esas variantes se agrupan
+    bajo la misma clase (una entrada de leyenda) y se avisa. Medido en los dos
+    programas, entidad a entidad.
+  - **No resuelto**: un campo **numérico** nulo en un **shapefile** ArcMap lo lee
+    como `0`, que no se puede distinguir de un 0 real: esas entidades caen en
+    «todos los demás». Tampoco se ha medido cómo escriben los dos programas un
+    número **decimal** dentro del valor compuesto.
 
 ## 2. Tipos de dato que el plugin rechaza (avisa y sale)
 

@@ -213,6 +213,49 @@ def test_categoria_resto_nula(fallos):
         fallos.append(u"sin simbolo por defecto")
 
 
+def test_categorizado_multicampo(fallos):
+    """QGIS 3.44.12: concat(coalesce(G,''), ', ', coalesce(R,'')) -> 2 campos
+    con separador, y variantes de nulo para las categorias con un vacio."""
+    capa = _qml("categorizado_multicampo.qml")[0]
+    rend = capa.renderer
+    _igual(fallos, rend.campos, [u"G", u"R"], u"campos")
+    _igual(fallos, rend.separador, u", ", u"separador")
+    _igual(fallos, dict((c.valor, sorted(c.variantes)) for c in rend.clases),
+           {u"1, Forestal MUP": [], u"1, ": [u"1,  ", u"1, <Null>"],
+            u", Rural": [u" , Rural", u"<Null>, Rural"]}, u"variantes")
+    _igual(fallos, rend.default_label, u"Todos los demas valores", u"resto")
+    if not any(u"valores unicos de 2 campos" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la traduccion: %s" % capa.avisos)
+
+    # Con || sin coalesce el nulo anula el valor: sin variantes.
+    rend = _qml("categorizado_multicampo_barras.qml")[0].renderer
+    _igual(fallos, rend.campos, [u"G", u"R"], u"campos con ||")
+    _igual(fallos, [c.variantes for c in rend.clases], [[], []],
+           u"sin variantes con ||")
+
+
+def test_expresion_multicampo(fallos):
+    """Patrones que se traducen y los que siguen siendo una expresion."""
+    f = parser_qgis._expresion_multicampo
+    _igual(fallos, f(u'concat("A", \' - \', "B", \' - \', "C")'),
+           ([u"A", u"B", u"C"], u" - ", [True, True, True]), u"concat de 3")
+    _igual(fallos, f(u"coalesce(\"A\",'') || '/' || B"),
+           ([u"A", u"B"], u"/", [True, False]), u"|| con un coalesce")
+    _igual(fallos, f(u"CONCAT(\"A\", 'it''s', \"B\")"),
+           ([u"A", u"B"], u"it's", [True, True]), u"comilla escapada")
+    for no in (u'"A"',                                       # un solo campo
+               u'concat("A", \', \', "B", \', \', "C", \', \', "D")',  # 4
+               u'concat("A", \', \', "B", \' - \', "C")',    # separadores distintos
+               u'concat("A", "B")',                          # sin separador
+               u'concat("A", \'\', "B")',                    # separador vacio
+               u'concat(upper("A"), \', \', "B")',           # funcion
+               u'concat(coalesce("A", \'x\'), \', \', "B")',  # coalesce a otra cosa
+               u'"A" + \', \' + "B"'):                       # otro operador
+        if f(no) is not None:
+            fallos.append(u"deberia seguir siendo expresion: %s -> %r"
+                          % (no, f(no)))
+
+
 def test_remap(fallos):
     """Reglas de --remap: prefijo con frontera de separador y sin mayusculas."""
     regla = parser_qgis.parse_remap(u"Z:=L:\\Mi unidad\\Carto\\")
