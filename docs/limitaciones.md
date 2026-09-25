@@ -13,8 +13,17 @@ No se convierten y así se decidió en el kickoff / ADR-001:
 
 - **Dirección inversa** ArcMap → QGIS (`.lyr` → `.qml`). La cubre SLYR Community gratis.
 - **ArcGIS Pro `.lyrx`** (JSON/CIM). Fase 2 futura; no necesitaría ArcObjects.
-- **Etiquetas.** Si la capa lleva etiquetas activas, el `.lyr` sale **sin ellas**
-  (se avisa: *"la capa lleva etiquetas activas en QGIS: el .lyr sale sin ellas"*).
+- **Etiquetas**: desde 2026-09-25 **sí** se traduce el etiquetado **simple**:
+  un campo o una concatenación de campos y literales (`concat`, `||`,
+  `coalesce(campo, '')` → `[A] & " - " & [B]`), fuente, tamaño (pt o mm),
+  color, negrita, cursiva, **halo** (buffer) y las escalas de las etiquetas. Se
+  emite con el **motor estándar** de ArcMap, que se pinta igual en un mapa
+  estándar y en uno **Maplex** (medido por render, texto y halo píxel a píxel);
+  en un mapa Maplex la **colocación** la decide Maplex, y siempre se avisa. **No
+  viajan**: la colocación de QGIS, el etiquetado **por reglas**, las
+  expresiones con funciones (`upper()`...), las propiedades *data-defined*, las
+  sombras y los fondos. En esos casos la capa sale igual, sin etiquetas o con
+  el valor fijo, y se avisa.
 - **Rule-based por expresión arbitraria**, geometry-generators, data-defined
   properties, expresiones. Solo se soporta el rule-based que se traduce a
   def-query simple (un `.lyr` por regla). Una propiedad **data-defined activa**

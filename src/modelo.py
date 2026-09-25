@@ -284,6 +284,28 @@ class CapaEstilo(object):
         self.avisos = avisos if avisos is not None else []
         # Capa de servicio (WMS): ServicioWMS. Sin dato de fichero ni renderer.
         self.servicio = None
+        # Etiquetas: Etiquetado o None.
+        self.etiquetado = None
+
+
+class Etiquetado(object):
+    """Etiquetado simple de QGIS -> LabelEngineLayerProperties de ArcMap
+    (motor ESTANDAR: medido el 2026-09-25 que un .lyr asi se pinta igual en un
+    mapa estandar y en uno Maplex; uno con propiedades Maplex no se pinta en
+    uno estandar). Medidas en puntos, escalas como denominadores (0 = sin
+    limite, escala_min = limite alejado)."""
+
+    def __init__(self, expresion, fuente, tamano_pt, color, negrita=False,
+                 cursiva=False, halo=None, escala_min=0.0, escala_max=0.0):
+        self.expresion = expresion    # expresion VBScript de ArcMap: [A] & " " & [B]
+        self.fuente = fuente
+        self.tamano_pt = tamano_pt
+        self.color = color            # (r, g, b)
+        self.negrita = negrita
+        self.cursiva = cursiva
+        self.halo = halo              # (tamano_pt, (r, g, b)) o None
+        self.escala_min = escala_min
+        self.escala_max = escala_max
 
 
 class ServicioWMS(object):

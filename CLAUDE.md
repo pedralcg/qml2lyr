@@ -10,7 +10,7 @@ El plugin SIEMPRE delega en el emisor como subproceso (ADR-001, abajo).
 
 No-gos: dirección inversa ArcMap→QGIS (la hace SLYR community gratis),
 rule-based por expresión arbitraria, ArcGIS Pro `.lyrx` (fase futura),
-expresiones / geometry-generators / data-defined, etiquetas.
+expresiones / geometry-generators / data-defined, etiquetado por reglas.
 
 ## Flujo de ramas (GitHub Flow)
 
@@ -272,6 +272,14 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   `TileMatrixSet`, `Style` e `ImageFormat` se fijan en la capa **después** de
   `Connect` y se leen de vuelta. El WMTS local de los tests pone la 4326 primero
   para cazarlo.
+- **Etiquetas**: `LabelEngineLayerProperties` **estándar**, nunca las de Maplex:
+  medido (2026-09-25, render) que un `.lyr` estándar se pinta igual en un mapa
+  estándar y en uno Maplex, y uno Maplex **no** se pinta en uno estándar. El
+  fallo de Maplex de [arcmap-mcp] es otro: modificar capas **dentro** de un MXD
+  Maplex. En el XML de QGIS `<text-buffer>` cuelga **dentro** de
+  `<text-style>`, y las escalas van **al revés** que en la API: `scaleMax` es el
+  `minimumScale` (límite alejado) → `AnnotationMinimumScale`. La fuente, con
+  `CreateObject("StdFont")`.
 - **Estadísticas del ráster**: `CalculateStatistics` reescribe los sidecars
   `.aux.xml` en cada pasada (resync inútil en una carpeta sincronizada). Se
   calcula solo si `GetRasterProperties` falla.

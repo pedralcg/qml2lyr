@@ -304,6 +304,30 @@ def test_wms(fallos):
         fallos.append(u"no avisa del estilo WMS: %s" % capa.avisos)
 
 
+def test_etiquetas(fallos):
+    """QGIS 3.44.12: etiqueta simple, por concatenacion y no traducible."""
+    e = _qml("etiquetas_simples.qml")[0].etiquetado
+    _igual(fallos, (e.expresion, e.fuente, e.tamano_pt, e.color, e.negrita,
+                    e.cursiva), (u"[TIPO]", u"Arial", 10.0, (18, 52, 86), True,
+                                 True), u"etiqueta simple")
+    _cerca(fallos, e.halo[0], MM2PT, u"halo de 1 mm en puntos")
+    _igual(fallos, e.halo[1], (255, 255, 0), u"color del halo")
+    # En el XML van al reves que en la API: scaleMax es el limite ALEJADO.
+    _igual(fallos, (e.escala_min, e.escala_max), (50000.0, 1000.0), u"escalas")
+
+    capa = _qml("etiquetas_expresion.qml")[0]
+    _igual(fallos, capa.etiquetado.expresion, u'[G] & " - " & [R]',
+           u"concatenacion a VBScript")
+    _cerca(fallos, capa.etiquetado.tamano_pt, 3 * MM2PT, u"tamano de 3 mm")
+    if not any(u"||" in a for a in capa.avisos):
+        fallos.append(u"no avisa del || con nulos: %s" % capa.avisos)
+
+    capa = _qml("etiquetas_no_traducible.qml")[0]
+    _igual(fallos, capa.etiquetado, None, u"upper() no se traduce")
+    if not any(u"upper" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la expresion: %s" % capa.avisos)
+
+
 def test_remap(fallos):
     """Reglas de --remap: prefijo con frontera de separador y sin mayusculas."""
     regla = parser_qgis.parse_remap(u"Z:=L:\\Mi unidad\\Carto\\")

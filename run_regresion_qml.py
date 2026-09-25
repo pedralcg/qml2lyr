@@ -650,6 +650,95 @@ def caso_raster_cortes_aux_gdal(fallos):
         fallos.append(u"el error no nombra el paso: %r" % capa.get("error"))
 
 
+PLANTILLA_MXD = (u"C:\\Program Files (x86)\\ArcGIS\\Desktop10.5\\MapTemplates"
+                 u"\\Standard Page Sizes\\ISO (A) Page Sizes\\ISO A3 Landscape.mxd")
+
+
+def _pixeles_de_color(ruta_lyr, rgb, png):
+    """Cuantos pixeles de color `rgb` (+-40 por canal) salen al dibujar el
+    .lyr solo en un mapa estandar, encuadrado en su dato."""
+    import arcpy
+    mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    capa = arcpy.mapping.Layer(ruta_lyr)
+    arcpy.mapping.AddLayer(df, capa)
+    ext = arcpy.Describe(capa.dataSource).extent
+    df.extent = arcpy.Extent(ext.XMin - 100, ext.YMin - 100,
+                             ext.XMax + 100, ext.YMax + 100)
+    arcpy.mapping.ExportToPNG(mxd, png, df, df_export_width=800,
+                              df_export_height=400)
+    del mxd
+    a = arcpy.RasterToNumPyArray(png).astype("int32")
+    cerca = ((abs(a[0] - rgb[0]) < 40) & (abs(a[1] - rgb[1]) < 40)
+             & (abs(a[2] - rgb[2]) < 40))
+    return int(cerca.sum())
+
+
+def caso_etiquetas(fallos):
+    """(17) Etiquetas simples -> LabelEngineLayerProperties estandar: campo o
+    concatenacion, fuente, tamano, color, halo y escalas. Se comprueba el
+    volcado Y que se pintan (pixeles del texto y del halo en un render)."""
+    lyr = _salida(u"etiquetas_simples.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"etiquetas_simples.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"etiquetas_simples no convirtio: %r" % capa)
+        return
+    etiquetas = lyr_dump.dump_lyr(lyr).get("etiquetas")
+    _igual(fallos, etiquetas, [{
+        u"expresion": u"[TIPO]", u"fuente": u"Arial", u"tamano": 10.0,
+        u"negrita": True, u"cursiva": True,
+        u"color": {u"nulo": False, u"rgb": [18, 52, 86], u"transparencia": 255},
+        u"halo": {u"tamano": 2.835, u"color": {u"nulo": False,
+                  u"rgb": [255, 255, 0], u"transparencia": 255}},
+        u"escala_min": 50000.0, u"escala_max": 1000.0}],
+        u"etiquetas en el .lyr")
+    if not any(u"Maplex" in a for a in capa.get("avisos") or []):
+        fallos.append(u"sin el aviso de Maplex: %r" % capa.get("avisos"))
+    # Las escalas de etiqueta dejan fuera el encuadre del render: se pinta
+    # una copia sin ellas.
+    import arcpy
+    sin_escalas = _salida(u"etiquetas_render.lyr")
+    capa_map = arcpy.mapping.Layer(lyr)
+    capa_map.saveACopy(sin_escalas)
+    from emisor import _init_arcobjects, _mods, _nobj, _qi
+    _init_arcobjects()
+    _, CA = _mods()
+    lf = _nobj(CA.LayerFile, CA.ILayerFile)
+    lf.Open(sin_escalas)
+    ap = _qi(_qi(lf.Layer, CA.IGeoFeatureLayer).AnnotationProperties,
+             CA.IAnnotateLayerPropertiesCollection2).Properties[0]
+    ap.AnnotationMinimumScale = 0
+    ap.AnnotationMaximumScale = 0
+    lf.Save()
+    lf.Close()
+    texto = _pixeles_de_color(sin_escalas, (18, 52, 86),
+                              _salida(u"etiquetas_render.png"))
+    halo = _pixeles_de_color(sin_escalas, (255, 255, 0),
+                             _salida(u"etiquetas_render_halo.png"))
+    if texto < 50 or halo < 50:
+        fallos.append(u"las etiquetas no se pintan: %d px de texto, %d de halo"
+                      % (texto, halo))
+
+    lyr = _salida(u"etiquetas_expresion.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"etiquetas_expresion.qml"),
+                            FC_NULOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    etiquetas = lyr_dump.dump_lyr(lyr).get("etiquetas") or [{}]
+    _igual(fallos, (etiquetas[0].get("expresion"), etiquetas[0].get("tamano")),
+           (u'[G] & " - " & [R]', 8.504), u"etiqueta por concatenacion")
+
+    lyr = _salida(u"etiquetas_no_traducible.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML,
+                                         u"etiquetas_no_traducible.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    _igual(fallos, capa.get("ok"), True, u"la capa sale aunque la etiqueta no")
+    _igual(fallos, lyr_dump.dump_lyr(lyr).get("etiquetas"), None,
+           u"sin etiquetas si la expresion no se traduce")
+
+
 def caso_categoria_resto_nula(fallos):
     """(13) La categoria NULL de QGIS es "todos los demas valores": en ArcMap
     va al simbolo por defecto. Antes salia como clase "<Null>" y la entidad B
@@ -998,6 +1087,7 @@ CASOS = [
     ("categoria_oculta", caso_categoria_oculta),
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
     ("raster_cortes_aux_gdal", caso_raster_cortes_aux_gdal),
+    ("etiquetas", caso_etiquetas),
     ("categoria_resto_nula", caso_categoria_resto_nula),
     ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),

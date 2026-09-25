@@ -29,7 +29,8 @@ from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     RendererGraduado, RendererRasterValoresUnicos,
                     ClaseCorteRaster, RendererRasterCortes,
                     ParadaColor, RendererRasterEstirado, CapaEstilo,
-                    ServicioWMS, ServicioWMTS, SimbologiaNoSoportada)
+                    ServicioWMS, ServicioWMTS, Etiquetado,
+                    SimbologiaNoSoportada)
 
 try:
     from urllib import unquote as _unquote  # py2.7 (el motor)
@@ -1409,6 +1410,138 @@ def _partir_datasource(datasource, avisos=None):
     return ruta_dataset(trozos[0], layername, layerid), defquery
 
 
+def _vbscript_literal(texto):
+    return u'"%s"' % texto.replace(u'"', u'""')
+
+
+def _expresion_etiqueta(texto, es_expresion, avisos):
+    """Campo o expresion de etiqueta de QGIS -> expresion VBScript de ArcMap,
+    o None si no se sabe traducir.
+
+    Se traduce un campo suelto y la concatenacion de campos y literales
+    (`concat(...)`, `||`, con o sin `coalesce(campo, '')`): `[A] & " - " & [B]`.
+    El `&` de VBScript trata el nulo como cadena vacia, igual que concat() y
+    coalesce(); con `||` sin coalesce QGIS no etiqueta si un campo es nulo, y
+    eso se avisa."""
+    texto = (texto or u"").strip()
+    if not texto:
+        return None
+    if not es_expresion:
+        return u"[%s]" % texto
+    m = re.match(ur"^concat\s*\((.*)\)$", texto, re.IGNORECASE | re.DOTALL)
+    if m:
+        terminos, con_barras = _partir_nivel_superior(m.group(1), u","), False
+    else:
+        terminos = _partir_nivel_superior(texto, u"||")
+        con_barras = len(terminos) > 1
+    partes, nulos_anulan = [], False
+    for termino in terminos:
+        analizado = _termino_concat(termino)
+        if analizado is None:
+            return None
+        tipo, valor, nulo_vacio = analizado
+        if tipo == u"literal":
+            partes.append(_vbscript_literal(valor))
+        else:
+            partes.append(u"[%s]" % valor)
+            nulos_anulan = nulos_anulan or (con_barras and not nulo_vacio)
+    if nulos_anulan:
+        avisos.append(u"etiqueta '%s': con '||' QGIS no etiqueta la entidad si "
+                      u"un campo es nulo; ArcMap (con &) etiqueta el resto"
+                      % texto)
+    return u" & ".join(partes)
+
+
+def _dd_activas_etiqueta(settings):
+    """Propiedades data-defined ACTIVAS del etiquetado (`<dd_properties>`,
+    mismo formato que `<data_defined_properties>` de los simbolos)."""
+    activas = []
+    for dd in settings.findall("dd_properties"):
+        for mapa in dd.findall("Option"):
+            for props in mapa.findall("Option"):
+                if props.get("name") != "properties":
+                    continue
+                for prop in props.findall("Option"):
+                    for campo in prop.findall("Option"):
+                        if campo.get("name") == "active" and \
+                                (campo.get("value") or u"").lower() == u"true":
+                            activas.append(prop.get("name") or u"?")
+    return activas
+
+
+def _etiquetado(elem, avisos):
+    """<labeling> de la capa -> Etiquetado, o None avisando de por que no.
+
+    Solo el etiquetado SIMPLE de QGIS. Lo que no se sabe traducir se avisa y la
+    capa sale sin etiquetas: la simbologia no depende de ello."""
+    if elem.get("labelsEnabled") != "1":
+        return None
+    lab = elem.find("labeling")
+    tipo = lab.get("type") if lab is not None else None
+    if tipo != u"simple":
+        avisos.append(u"etiquetado '%s' de QGIS (solo se traduce el simple): "
+                      u"el .lyr sale sin etiquetar" % (tipo or u"desconocido"))
+        return None
+    settings = lab.find("settings")
+    estilo = settings.find("text-style") if settings is not None else None
+    if estilo is None:
+        avisos.append(u"etiquetado sin <text-style>: el .lyr sale sin etiquetar")
+        return None
+    expresion = _expresion_etiqueta(estilo.get("fieldName"),
+                                    estilo.get("isExpression") == "1", avisos)
+    if expresion is None:
+        avisos.append(u"etiqueta por la expresion '%s': ArcMap no evalua "
+                      u"expresiones de QGIS (solo campos y concatenaciones); "
+                      u"el .lyr sale sin etiquetar" % estilo.get("fieldName"))
+        return None
+    try:
+        tamano = _a_puntos(estilo.get("fontSize") or 10,
+                           estilo.get("fontSizeUnit") or u"Point",
+                           u"tamano de etiqueta")
+        color, alfa = _rgb(estilo.get("textColor"), u"color de etiqueta")
+        halo = None
+        # <text-buffer> cuelga DENTRO de <text-style> (QGIS 3.44).
+        buf = estilo.find("text-buffer")
+        if buf is not None and buf.get("bufferDraw") == "1":
+            halo_rgb, halo_alfa = _rgb(buf.get("bufferColor"),
+                                       u"color del halo")
+            halo = (_a_puntos(buf.get("bufferSize") or 1,
+                              buf.get("bufferSizeUnits") or u"MM",
+                              u"tamano del halo"), halo_rgb)
+            if halo_alfa != 255 or \
+                    float(buf.get("bufferOpacity") or 1) < 1:
+                avisos.append(u"halo de etiqueta semitransparente: ArcMap lo "
+                              u"pinta opaco")
+    except SimbologiaNoSoportada as e:
+        avisos.append(u"%s: el .lyr sale sin etiquetar" % e)
+        return None
+    if alfa != 255 or float(estilo.get("textOpacity") or 1) < 1:
+        avisos.append(u"texto de etiqueta semitransparente: ArcMap lo pinta "
+                      u"opaco")
+    escala_min, escala_max = 0.0, 0.0
+    rend = settings.find("rendering")
+    if rend is not None and rend.get("scaleVisibility") == "1":
+        # GOTCHA (medido en QGIS 3.44.12, 2026-09-25): en el XML de etiquetas
+        # los nombres van AL REVES que en la API. `scaleMax` es el
+        # minimumScale de QgsPalLayerSettings (limite ALEJADO, denominador
+        # grande) y `scaleMin` el maximumScale (limite acercado).
+        escala_min = float(rend.get("scaleMax") or 0)
+        escala_max = float(rend.get("scaleMin") or 0)
+    activas = _dd_activas_etiqueta(settings)
+    if activas:
+        avisos.append(u"etiquetas con propiedades data-defined activas (%s): "
+                      u"ArcMap usa el valor fijo del estilo" % u", ".join(activas))
+    avisos.append(u"etiquetas con el motor ESTANDAR de ArcMap: la colocacion "
+                  u"de QGIS no se traslada. En un mapa con Maplex se pintan "
+                  u"igual, pero la colocacion la decide Maplex")
+    return Etiquetado(expresion=expresion,
+                      fuente=estilo.get("fontFamily") or u"Arial",
+                      tamano_pt=tamano, color=color,
+                      negrita=int(estilo.get("fontWeight") or 50) >= 63,
+                      cursiva=estilo.get("fontItalic") == "1", halo=halo,
+                      escala_min=escala_min, escala_max=escala_max)
+
+
 def _cabecera_capa(elem, avisos):
     """Atributos de CAPA (no de simbolo) -> dict, y avisos de lo que se pierde.
 
@@ -1424,12 +1557,7 @@ def _cabecera_capa(elem, avisos):
     GOTCHA heredado: en un raster la opacidad NO esta en <layerOpacity> (que no
     aparece) sino en el atributo `opacity` del <rasterrenderer>.
     """
-    if elem.get("labelsEnabled") == "1":
-        # Las etiquetas son otro sistema entero (ILabelEngineLayerProperties),
-        # fuera del MVP de simbologia. Pero el usuario tiene que enterarse de
-        # que su capa etiquetada llega a ArcMap muda.
-        avisos.append(u"la capa lleva etiquetas activas en QGIS: el .lyr sale "
-                      u"sin etiquetar (fuera del alcance del MVP)")
+    etiquetado = _etiquetado(elem, avisos)
 
     rr_elem = elem.find("pipe/rasterrenderer")
     if rr_elem is not None:
@@ -1449,7 +1577,7 @@ def _cabecera_capa(elem, avisos):
         escala_min = float(elem.get("minScale") or 0)
         escala_max = float(elem.get("maxScale") or 0)
     return {"opacidad": opacidad, "escala_min": escala_min,
-            "escala_max": escala_max}
+            "escala_max": escala_max, "etiquetado": etiquetado}
 
 
 def _capas_desde_estilo(elem, nombre, avisos):
@@ -1484,6 +1612,7 @@ def _aplicar_cabecera(capas, cabecera, datasource=None, defquery=None):
         capa.opacidad = cabecera["opacidad"]
         capa.escala_min = cabecera["escala_min"]
         capa.escala_max = cabecera["escala_max"]
+        capa.etiquetado = cabecera.get("etiquetado")
         if datasource is not None:
             capa.datasource = datasource
         # La def-query de la CAPA acota a todas las reglas.

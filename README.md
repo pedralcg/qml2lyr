@@ -35,16 +35,18 @@ estilo por defecto.
 
 | | |
 |---|---|
-| **Renderers** | símbolo único, categorizado, graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
+| **Renderers** | símbolo único, categorizado (también por la concatenación de 2 o 3 campos), graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
 | **Relleno** | sólido, hueco, tramado (6 patrones), multicapa, relleno con imagen |
 | **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot` |
 | **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
 | **Capa** | definition query, opacidad, visibilidad por escala |
+| **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
 | **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
+| **Servicios** (`--batch`) | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
 
-Lo que **no** convierte (etiquetas, expresiones, propiedades definidas por datos,
-ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitaciones.md).
+Lo que **no** convierte (etiquetado por reglas, expresiones, propiedades
+definidas por datos, ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitaciones.md).
 
 ## Requisitos
 

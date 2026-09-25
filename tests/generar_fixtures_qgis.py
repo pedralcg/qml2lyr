@@ -315,6 +315,69 @@ def qml_raster_cortes():
     print("escrito", os.path.join(destino, "cortes.tif.aux.xml"))
 
 
+def _etiquetar(capa, campo, es_expresion, tamano, unidad, color, negrita=False,
+               cursiva=False, halo=None, escalas=None):
+    from qgis.core import (Qgis, QgsPalLayerSettings, QgsTextBufferSettings,
+                           QgsTextFormat, QgsVectorLayerSimpleLabeling)
+    from qgis.PyQt.QtGui import QFont
+    ajustes = QgsPalLayerSettings()
+    ajustes.fieldName = campo
+    ajustes.isExpression = es_expresion
+    formato = QgsTextFormat()
+    fuente = QFont("Arial")
+    fuente.setBold(negrita)
+    fuente.setItalic(cursiva)
+    formato.setFont(fuente)
+    formato.setSize(tamano)
+    formato.setSizeUnit(unidad)
+    formato.setColor(QColor(color))
+    if halo:
+        buffer = QgsTextBufferSettings()
+        buffer.setEnabled(True)
+        buffer.setSize(halo[0])
+        buffer.setSizeUnit(Qgis.RenderUnit.Millimeters)
+        buffer.setColor(QColor(halo[1]))
+        formato.setBuffer(buffer)
+    ajustes.setFormat(formato)
+    if escalas:
+        # API: minimumScale = limite ALEJADO. En el XML sale como scaleMax.
+        ajustes.scaleVisibility = True
+        ajustes.minimumScale, ajustes.maximumScale = escalas
+    capa.setLabeling(QgsVectorLayerSimpleLabeling(ajustes))
+    capa.setLabelsEnabled(True)
+
+
+def qml_etiquetas_simples():
+    """Campo, Arial negrita y cursiva de 10 pt, color, halo de 1 mm y escalas."""
+    from qgis.core import Qgis
+    capa = _vectorial("poligonos.shp", "Etiquetas simples")
+    _etiquetar(capa, "TIPO", False, 10, Qgis.RenderUnit.Points, "#123456",
+               negrita=True, cursiva=True, halo=(1, "#ffff00"),
+               escalas=(50000, 1000))
+    _guardar_qml(capa, "etiquetas_simples.qml")
+
+
+def qml_etiquetas_expresion():
+    """Concatenacion con || y tamano en mm (sin halo)."""
+    from qgis.core import Qgis
+    capa = QgsVectorLayer(os.path.join(DIR_DATOS, "nulos.gdb")
+                          + "|layername=cuadros", "Etiquetas expresion", "ogr")
+    if not capa.isValid():
+        sys.exit("nulos.gdb no valida (corre antes run_regresion_qml.py)")
+    _etiquetar(capa, "\"G\" || ' - ' || \"R\"", True, 3,
+               Qgis.RenderUnit.Millimeters, "#e41a1c")
+    _guardar_qml(capa, "etiquetas_expresion.qml")
+
+
+def qml_etiquetas_no_traducible():
+    """Expresion que ArcMap no sabe evaluar: la capa sale, sin etiquetas."""
+    from qgis.core import Qgis
+    capa = _vectorial("poligonos.shp", "Etiquetas upper")
+    _etiquetar(capa, "upper(\"TIPO\")", True, 10, Qgis.RenderUnit.Points,
+               "#000000")
+    _guardar_qml(capa, "etiquetas_no_traducible.qml")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -492,6 +555,9 @@ GENERADORES = {
     "categorizado_multicampo": qml_categorizado_multicampo,
     "categorizado_multicampo_barras": qml_categorizado_multicampo_barras,
     "raster_cortes": qml_raster_cortes,
+    "etiquetas_simples": qml_etiquetas_simples,
+    "etiquetas_expresion": qml_etiquetas_expresion,
+    "etiquetas_no_traducible": qml_etiquetas_no_traducible,
     "batch_sintetico": qgz_batch_sintetico,
     "batch_remap": qgz_batch_remap,
     "batch_wms": qgz_batch_wms,

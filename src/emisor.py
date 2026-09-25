@@ -601,6 +601,50 @@ def _emitir_wms(capa_estilo, ruta_lyr_salida):
     return _guardar_capa_servicio(capa_estilo, capa, ruta_lyr_salida)
 
 
+def _etiquetar(capa_geo, etiquetado):
+    """Etiquetado del modelo -> LabelEngineLayerProperties ESTANDAR.
+
+    Receta probada en el MXD de Majal Blanco (2026-09-25). Estandar y no
+    Maplex, medido: un .lyr con propiedades estandar se pinta igual (texto y
+    halo) en un mapa estandar y en uno Maplex; uno con propiedades Maplex no
+    se pinta en un mapa estandar."""
+    from comtypes.client import CreateObject
+    D, CA = _mods()
+    texto = _nobj(D.TextSymbol, D.ITextSymbol)
+    fuente = CreateObject("StdFont")
+    fuente.Name = etiquetado.fuente
+    fuente.Bold = etiquetado.negrita
+    fuente.Italic = etiquetado.cursiva
+    texto.Font = fuente
+    texto.Size = etiquetado.tamano_pt
+    texto.Color = _color(etiquetado.color)
+    if etiquetado.halo is not None:
+        tamano, rgb = etiquetado.halo
+        mascara = _qi_exig(texto, D.IMask)
+        mascara.MaskStyle = D.esriMSHalo
+        mascara.MaskSize = tamano
+        relleno = _nobj(D.SimpleFillSymbol, D.ISimpleFillSymbol)
+        relleno.Color = _color(rgb)
+        borde = _nobj(D.SimpleLineSymbol, D.ISimpleLineSymbol)
+        borde.Style = D.esriSLSNull
+        relleno.Outline = borde
+        mascara.MaskSymbol = relleno
+    props = _nobj(CA.LabelEngineLayerProperties,
+                  CA.ILabelEngineLayerProperties)
+    props.Expression = etiquetado.expresion
+    props.IsExpressionSimple = True
+    props.Symbol = texto
+    anotar = _qi_exig(props, CA.IAnnotateLayerProperties)
+    if etiquetado.escala_min:
+        anotar.AnnotationMinimumScale = float(etiquetado.escala_min)
+    if etiquetado.escala_max:
+        anotar.AnnotationMaximumScale = float(etiquetado.escala_max)
+    coleccion = capa_geo.AnnotationProperties
+    coleccion.Clear()
+    coleccion.Add(anotar)
+    capa_geo.DisplayAnnotation = True
+
+
 @contextlib.contextmanager
 def _paso(que):
     """Pone nombre al paso en el que falla ArcObjects/arcpy. Un COMError
@@ -785,6 +829,11 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
         layer.MinimumScale = float(capa_estilo.escala_min)
     if getattr(capa_estilo, "escala_max", 0):
         layer.MaximumScale = float(capa_estilo.escala_max)
+
+    if capa_estilo.etiquetado is not None and not es_raster:
+        with _paso(u"etiquetas"):
+            _etiquetar(_qi_exig(layer, CA.IGeoFeatureLayer),
+                       capa_estilo.etiquetado)
 
     if capa_estilo.defquery:
         fld = _qi(layer, CA.IFeatureLayerDefinition)

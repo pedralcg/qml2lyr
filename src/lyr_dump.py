@@ -283,6 +283,38 @@ def _dump_rampa(ramp):
     return {"tipo": "otra", "tamanyo": int(ramp.Size)}
 
 
+def _dump_etiquetas(capa_geo):
+    """Clases de etiqueta de la capa (solo si las muestra)."""
+    D, CA = _mods()
+    col = _qi(capa_geo.AnnotationProperties,
+              CA.IAnnotateLayerPropertiesCollection2)
+    clases = []
+    for k in range(col.Count):
+        anotar = col.Properties[k]
+        lep = _qi(anotar, CA.ILabelEngineLayerProperties)
+        if lep is None:
+            clases.append({"tipo": "no-estandar"})
+            continue
+        ts = lep.Symbol
+        fuente = ts.Font
+        clase = {"expresion": lep.Expression,
+                 "fuente": fuente.Name, "tamano": round(ts.Size, 3),
+                 "negrita": bool(fuente.Bold), "cursiva": bool(fuente.Italic),
+                 "color": _dump_color(ts.Color)}
+        mascara = _qi(ts, D.IMask)
+        if mascara is not None and mascara.MaskStyle == D.esriMSHalo:
+            clase["halo"] = {"tamano": round(mascara.MaskSize, 3),
+                             "color": _dump_color(
+                                 _qi(mascara.MaskSymbol, D.IFillSymbol).Color)}
+        ap = _qi(anotar, CA.IAnnotateLayerProperties)
+        if ap.AnnotationMinimumScale:
+            clase["escala_min"] = float(ap.AnnotationMinimumScale)
+        if ap.AnnotationMaximumScale:
+            clase["escala_max"] = float(ap.AnnotationMaximumScale)
+        clases.append(clase)
+    return clases
+
+
 def _wms_encendidas(capa, visible_arriba):
     """Nombres WMS de las hojas que se VEN: visibles ellas y todos sus padres.
     Una hoja encendida bajo un grupo apagado no pinta nada."""
@@ -348,6 +380,8 @@ def dump_lyr(ruta_lyr):
         gfl = _qi(layer, CA.IGeoFeatureLayer)
         if gfl is not None:
             resultado["renderer"] = _dump_renderer(gfl.Renderer)
+        if gfl is not None and gfl.DisplayAnnotation:
+            resultado["etiquetas"] = _dump_etiquetas(gfl)
         fld = _qi(layer, CA.IFeatureLayerDefinition)
         if fld is not None and fld.DefinitionExpression:
             resultado["defquery"] = fld.DefinitionExpression
