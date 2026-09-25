@@ -27,4 +27,9 @@ jobs:
       - name: Publicar el release con el zip
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "${{ steps.zip.outputs.ruta }}" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          ZIP: ${{ steps.zip.outputs.ruta }}
+        # La nota va delante de las generadas: los "Source code (zip)" que GitHub
+        # añade solos no se instalan como complemento.
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag \
+            --notes "**Para instalar en QGIS descarga $(basename "$ZIP")** y usa Complementos > Administrar e instalar complementos > Instalar a partir de ZIP. Los «Source code» son el código del repositorio y no se instalan como complemento."

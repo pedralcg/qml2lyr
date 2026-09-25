@@ -55,8 +55,8 @@ ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitac
 
 ## Instalación y uso
 
-Descarga el `.zip` del último [release](https://github.com/pedralcg/qml2lyr/releases/latest)
-e instálalo en QGIS con **Complementos → Administrar e instalar complementos →
+Descarga `qml2lyr-qgis-plugin-X.Y.Z.zip` del último [release](https://github.com/pedralcg/qml2lyr/releases/latest)
+(no los «Source code», que son el repositorio) e instálalo en QGIS con **Complementos → Administrar e instalar complementos →
 Instalar a partir de ZIP**. No hay que configurar nada: el zip lleva el motor y
 el Python 2.7 de ArcGIS 10.5 se detecta solo. Detalles y la instalación desde el
 repositorio, en [`plugin/README.md`](plugin/README.md).

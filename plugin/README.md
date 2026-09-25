@@ -30,8 +30,10 @@ funciona en equipos sin ArcGIS 10.5.
 
 ## Instalación
 
-1. Descarga `qml2lyr-X.Y.Z.zip` del último
-   [release](https://github.com/pedralcg/qml2lyr/releases/latest).
+1. Descarga `qml2lyr-qgis-plugin-X.Y.Z.zip` del último
+   [release](https://github.com/pedralcg/qml2lyr/releases/latest), en *Assets*.
+   **No** los «Source code (zip)»: son el repositorio y QGIS no los carga
+   (`No module named 'qml2lyr-0'`).
 2. En QGIS: **Complementos → Administrar e instalar complementos → Instalar a
    partir de ZIP**, elige el `.zip` e instala. Es un complemento experimental:
    si no aparece, marca «Mostrar también complementos experimentales» en
@@ -78,7 +80,7 @@ Capas de memoria, PostGIS, WMS/WFS y otros contenedores multicapa (`.kml`,
 ```
 plugin/
   deploy.ps1              ← copia al perfil de QGIS (plugin + motor)
-  empaquetar.py           ← genera dist/qml2lyr-X.Y.Z.zip (plugin + motor + LICENSE)
+  empaquetar.py           ← genera dist/qml2lyr-qgis-plugin-X.Y.Z.zip (plugin + motor + LICENSE)
   qml2lyr/
     __init__.py           ← classFactory
     metadata.txt          ← metadatos del plugin
