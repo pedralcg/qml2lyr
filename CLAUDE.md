@@ -291,7 +291,11 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   medido (2026-09-25, render) que un `.lyr` estándar se pinta igual en un mapa
   estándar y en uno Maplex, y uno Maplex **no** se pinta en uno estándar. El
   fallo de Maplex de [arcmap-mcp] es otro: modificar capas **dentro** de un MXD
-  Maplex. En el XML de QGIS `<text-buffer>` cuelga **dentro** de
+  Maplex. Para saber si un MXD de prueba es Maplex **no** fiarse de leer
+  `IMap.AnnotationEngine` en standalone (arcmap-mcp lo vio mentir): el
+  discriminador es que un `.lyr` con propiedades Maplex pinta 0 píxeles en un
+  mapa estándar y >0 en uno Maplex. Así se verificó, sobre un MXD con Maplex
+  activado a mano en la interfaz. Poner Maplex por script no persiste. En el XML de QGIS `<text-buffer>` cuelga **dentro** de
   `<text-style>`, y las escalas van **al revés** que en la API: `scaleMax` es el
   `minimumScale` (límite alejado) → `AnnotationMinimumScale`. La fuente, con
   `CreateObject("StdFont")`.
