@@ -40,4 +40,4 @@ jobs:
       - name: Empaquetar el plugin
         run: |
           python plugin/empaquetar.py
-          python -c "import zipfile,glob; n=zipfile.ZipFile(glob.glob('dist/*.zip')[0]).namelist(); print('\n'.join(n)); assert 'qml2lyr/motor/emisor.py' in n and 'qml2lyr/metadata.txt' in n"
+          python -c "import zipfile,glob; n=zipfile.ZipFile(glob.glob('dist/*.zip')[0]).namelist(); print('\n'.join(n)); assert 'qml2lyr/motor/emisor.py' in n and 'qml2lyr/metadata.txt' in n and 'qml2lyr/motor/comtypes/client/__init__.py' in n"

@@ -27,6 +27,8 @@ Get-ChildItem -Recurse -Force -Path $destino -Include "__pycache__", "*.pyc" |
 $motor = Join-Path $destino "motor"
 New-Item -ItemType Directory -Force -Path $motor | Out-Null
 Copy-Item -Force -Path (Join-Path $PSScriptRoot "..\src\*.py") -Destination $motor
+# comtypes va junto al motor, como en el zip (ver vendor\README.md).
+Copy-Item -Recurse -Force -Path (Join-Path $PSScriptRoot "..\vendor\comtypes") -Destination $motor
 
 Write-Host "Plugin desplegado en: $destino (motor incluido)"
 Write-Host "En QGIS: Complementos -> Administrar e instalar -> activa 'qml2lyr'."

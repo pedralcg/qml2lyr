@@ -50,7 +50,10 @@ ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitac
 
 - Windows con **QGIS 3.22+** y **ArcGIS Desktop 10.5** (licencia Advanced) en la
   misma máquina.
-- El Python 2.7 de ArcGIS: `C:\Python27\ArcGIS10.5\python.exe` (trae `comtypes`).
+- El Python 2.7 de ArcGIS: `C:\Python27\ArcGIS10.5\python.exe`. ArcGIS **no**
+  trae `comtypes`, pero el zip del plugin ya lo lleva dentro. Solo hace falta
+  instalarlo (`python.exe -m pip install comtypes==1.1.7`) para usar el motor
+  desde la línea de comandos, sin el plugin.
 - Sin red, sin base de datos, sin credenciales.
 
 ## Instalación y uso

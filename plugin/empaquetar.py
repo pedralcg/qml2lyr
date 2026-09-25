@@ -12,6 +12,8 @@ El .zip lleva la carpeta `qml2lyr/` con:
 - el codigo del plugin (`plugin/qml2lyr/`, sin caches ni un `motor/` local);
 - `motor/`: TODOS los `src/*.py`, que el plugin lanza con el Python 2.7 de
   ArcGIS. Sin lista de ficheros: un modulo nuevo en `src/` entra solo;
+- `motor/comtypes/`: copia de `vendor/comtypes/` (con su licencia MIT), porque
+  el Python 2.7 de ArcGIS 10.5 no lo trae;
 - `LICENSE`.
 
 Python 3 y solo la biblioteca estandar: lo corre el CI en Ubuntu y la Action de
@@ -27,9 +29,14 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIR_PLUGIN = os.path.join(RAIZ, "plugin", "qml2lyr")
 DIR_SRC = os.path.join(RAIZ, "src")
 DIR_DIST = os.path.join(RAIZ, "dist")
+DIR_COMTYPES = os.path.join(RAIZ, "vendor", "comtypes")
 
 # Lo que el plugin necesita del motor para funcionar; si falta, el zip no vale.
 IMPRESCINDIBLES = ("emisor.py", "modelo.py", "parser_qgis.py")
+# comtypes: el Python 2.7 de ArcGIS 10.5 no lo trae (ver vendor/README.md).
+IMPRESCINDIBLES_COMTYPES = ("qml2lyr/motor/comtypes/__init__.py",
+                            "qml2lyr/motor/comtypes/client/__init__.py",
+                            "qml2lyr/motor/comtypes/LICENSE.txt")
 
 
 def version_metadata():
@@ -56,6 +63,20 @@ def _ficheros_motor():
             yield os.path.join(DIR_SRC, f), os.path.join("qml2lyr", "motor", f)
 
 
+def _ficheros_comtypes():
+    # Junto al motor: se lanza como script desde motor/, asi que esta copia
+    # va por delante de cualquier comtypes del Python de ArcGIS. Sin gen/: lo
+    # crea comtypes al generar los envoltorios de las OLB.
+    for base, dirs, ficheros in os.walk(DIR_COMTYPES):
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", "gen", "test")]
+        for f in ficheros:
+            if f.endswith((".pyc", ".pyo")):
+                continue
+            ruta = os.path.join(base, f)
+            yield ruta, os.path.join("qml2lyr", "motor", "comtypes",
+                                     os.path.relpath(ruta, DIR_COMTYPES))
+
+
 def empaquetar(tag=None):
     version = version_metadata()
     if tag is not None and tag.lstrip("v") != version:
@@ -70,6 +91,12 @@ def empaquetar(tag=None):
     faltan = [f for f in IMPRESCINDIBLES if f not in en_motor]
     if faltan:
         sys.exit("faltan en el motor: %s" % ", ".join(faltan))
+
+    entradas += list(_ficheros_comtypes())
+    nombres = {a.replace(os.sep, "/") for _, a in entradas}
+    faltan = [f for f in IMPRESCINDIBLES_COMTYPES if f not in nombres]
+    if faltan:
+        sys.exit("falta comtypes en el zip: %s" % ", ".join(faltan))
 
     os.makedirs(DIR_DIST, exist_ok=True)
     salida = os.path.join(DIR_DIST, "qml2lyr-qgis-plugin-%s.zip" % version)

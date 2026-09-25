@@ -52,7 +52,10 @@ El CI empaqueta en cada PR y comprueba que el zip lleva `motor/emisor.py`.
 
 ## Entorno de ejecución
 
-- **Python 2.7 de ArcGIS 10.5**: `C:\Python27\ArcGIS10.5\python.exe` (trae comtypes 1.1.7).
+- **Python 2.7 de ArcGIS 10.5**: `C:\Python27\ArcGIS10.5\python.exe` En Torre tiene
+  comtypes 1.1.7, **pero se instaló a mano: ArcGIS 10.5 no lo trae.** Por eso el zip
+  lleva `vendor/comtypes/` en `motor/comtypes/` (ver `vendor/README.md`); no
+  quitarlo creyendo que sobra porque en Torre funcione sin él.
 - ArcObjects vía comtypes para emitir; `xml.etree` para parsear; `argparse` para el CLI.
 - Sin BD, sin auth, sin red, sin `.env` (no hay secretos).
 - Dependencia dura: ArcGIS 10.5 instalado (registro `SOFTWARE\Wow6432Node\ESRI\Desktop10.5`).
