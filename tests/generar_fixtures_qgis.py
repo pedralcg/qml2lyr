@@ -276,6 +276,45 @@ def qml_categorizado_multicampo_barras():
         "categorizado_multicampo_barras.qml")
 
 
+def qml_raster_cortes():
+    """Pseudocolor DISCRETO (clases) sobre un raster flotante, y el .aux.xml
+    que GDAL deja al pedir estadisticas aproximadas (sin histograma): la
+    combinacion que tumbaba la emision con la pendiente de Majal Blanco."""
+    import shutil
+    from osgeo import gdal
+    from qgis.core import (QgsColorRampShader, QgsRasterShader,
+                           QgsSingleBandPseudoColorRenderer)
+    ruta = os.path.join(DIR_DATOS, "cortes.tif")
+    aux = ruta + ".aux.xml"
+    if os.path.exists(aux):
+        os.remove(aux)
+    capa = QgsRasterLayer(ruta, "Cortes")
+    if not capa.isValid():
+        sys.exit("cortes.tif no valido (corre antes run_regresion_qml.py)")
+    rampa = QgsColorRampShader(0, 45, None, QgsColorRampShader.Discrete)
+    rampa.setColorRampItemList([
+        QgsColorRampShader.ColorRampItem(10, QColor("#38a800"), "llano"),
+        QgsColorRampShader.ColorRampItem(30, QColor("#ffff00"), "medio"),
+        QgsColorRampShader.ColorRampItem(float("inf"), QColor("#e60000"),
+                                         "fuerte")])
+    sombreado = QgsRasterShader()
+    sombreado.setRasterShaderFunction(rampa)
+    capa.setRenderer(QgsSingleBandPseudoColorRenderer(
+        capa.dataProvider(), 1, sombreado))
+    _guardar_qml(capa, "raster_cortes.qml")
+    del capa
+    # El sidecar lo escribe GDAL, no la mano: estadisticas aproximadas, que es
+    # lo que deja QGIS (STATISTICS_APPROXIMATE=YES, sin histograma).
+    ds = gdal.Open(ruta)
+    ds.GetRasterBand(1).ComputeStatistics(True)
+    ds = None
+    destino = os.path.join(DIR_FIX, "aux_gdal")
+    if not os.path.isdir(destino):
+        os.makedirs(destino)
+    shutil.move(aux, os.path.join(destino, "cortes.tif.aux.xml"))
+    print("escrito", os.path.join(destino, "cortes.tif.aux.xml"))
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -443,6 +482,7 @@ GENERADORES = {
     "categoria_resto_nula": qml_categoria_resto_nula,
     "categorizado_multicampo": qml_categorizado_multicampo,
     "categorizado_multicampo_barras": qml_categorizado_multicampo_barras,
+    "raster_cortes": qml_raster_cortes,
     "batch_sintetico": qgz_batch_sintetico,
     "batch_remap": qgz_batch_remap,
     "batch_wms": qgz_batch_wms,

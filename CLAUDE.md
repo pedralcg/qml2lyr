@@ -242,8 +242,16 @@ Servicios: **WMS** en `--batch` (`CapaEstilo.servicio`, sin renderer) → `.lyr`
   quedan para QA visual.
 - **Cortes ráster**: `IRasterClassifyColorRampRenderer` **no tiene `MinimumBreak`**.
   Tiene `ClassCount+1` cortes y **`Break[0]` es el mínimo**: el techo de la clase
-  `i` es `Break[i+1]`. Antes de emitir hace falta `CalculateStatistics_management`
-  y un `Update()`, o el min/max no existen.
+  `i` es `Break[i+1]`. **Todos los cortes (con `Break[0]` = mínimo de
+  `GetRasterProperties`) van ANTES del primer `Update()`**: con los cortes sin
+  fijar, `Update()` clasifica por su cuenta y necesita el **histograma**, que un
+  `.aux.xml` escrito por GDAL/QGIS no trae (min/max sí) → «Error no
+  especificado». Era la pendiente de 2 GB de Majal Blanco: ni el tamaño ni Drive
+  (medido 2026-09-25; mismo render con y sin histograma). Etiquetas y símbolos,
+  **después** del `Update()`: escribir un `Break` regenera la etiqueta.
+- **Errores de ArcObjects con nombre de paso**: `emisor._paso(...)` envuelve
+  estadísticas, apertura del ráster y renderer, y el error dice
+  `fallo en <paso>: COMError: ...`.
 - **Ráster, opacidad**: no está en `<layerOpacity>` sino en el atributo `opacity`
   del `<rasterrenderer>`.
 - **Ráster, valores ocultos**: `<rasterTransparency>` cuelga DENTRO de

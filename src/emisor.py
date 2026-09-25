@@ -16,6 +16,7 @@ sys.coinit_flags = 2  # antes de importar comtypes
 import os
 import _winreg
 
+import contextlib
 import hashlib
 import json
 import re as _re
@@ -376,8 +377,10 @@ def _renderer(renderer_modelo):
         u"renderer %s sin emisor" % type(renderer_modelo).__name__)
 
 
-def _renderer_raster(renderer_modelo, raster):
-    """Renderer raster del modelo -> IRasterRenderer ya enganchado al raster."""
+def _renderer_raster(renderer_modelo, raster, minimo=None):
+    """Renderer raster del modelo -> IRasterRenderer ya enganchado al raster.
+
+    `minimo`: minimo del raster, para el Break[0] del clasificado."""
     _, CA = _mods()
 
     if isinstance(renderer_modelo, RendererRasterValoresUnicos):
@@ -401,17 +404,29 @@ def _renderer_raster(renderer_modelo, raster):
         rr = _qi_exig(ccr, CA.IRasterRenderer)
         rr.Raster = raster
         ccr.ClassCount = len(renderer_modelo.clases)
-        # Update() clasifica el raster por su cuenta: deja Break[0] en el minimo
-        # y Break[ClassCount] en el maximo. Imprescindible ANTES de escribir.
-        rr.Update()
+        # GOTCHA: hay ClassCount+1 cortes y Break[0] es el MINIMO (este
+        # renderer no tiene MinimumBreak, al reves que el vectorial), asi que
+        # el techo de la clase i es Break[i+1]. El motor original escribia los
+        # techos en Break[0..n-1]: desplazaba todas las clases una posicion,
+        # dejaba la ultima vacia y el tramo inferior sin clase. Verificado
+        # 2026-07-15 contra los datos.
+        #
+        # GOTCHA (2026-09-25): los cortes van TODOS antes del primer Update().
+        # Con los cortes sin fijar, Update() clasifica el raster por su cuenta
+        # y para eso necesita su HISTOGRAMA; unas estadisticas escritas por
+        # GDAL/QGIS (.aux.xml sin histograma) le bastan a GetRasterProperties
+        # pero no a Update(), que casca con «Error no especificado». Con los
+        # cortes puestos no clasifica, no lo necesita y dibuja igual (medido:
+        # mismo render con y sin histograma).
+        if minimo is None:
+            raise RuntimeError(u"sin minimo del raster para el primer corte")
+        ccr.Break[0] = minimo
         for i, clase in enumerate(renderer_modelo.clases):
-            # GOTCHA: hay ClassCount+1 cortes y Break[0] es el MINIMO (este
-            # renderer no tiene MinimumBreak, al reves que el vectorial), asi
-            # que el techo de la clase i es Break[i+1]. El motor original
-            # escribia los techos en Break[0..n-1]: desplazaba todas las clases
-            # una posicion, dejaba la ultima vacia y el tramo inferior sin
-            # clase. Verificado 2026-07-15 contra los datos.
             ccr.Break[i + 1] = float(clase.superior)
+        rr.Update()
+        # Etiquetas y simbolos DESPUES del Update(): escribir un Break regenera
+        # la etiqueta de su clase, y un Update() sin el previo las rehace todas.
+        for i, clase in enumerate(renderer_modelo.clases):
             ccr.Label[i] = clase.label
             ccr.Symbol[i] = _simbolo(clase.simbolo)
         rr.Update()
@@ -601,6 +616,20 @@ def _emitir_wms(capa_estilo, ruta_lyr_salida):
     return ruta_lyr_salida
 
 
+@contextlib.contextmanager
+def _paso(que):
+    """Pone nombre al paso en el que falla ArcObjects/arcpy. Un COMError
+    «Error no especificado» a secas no dice si fallo abrir el dato, las
+    estadisticas o el renderer. Lo no soportado pasa tal cual."""
+    try:
+        yield
+    except SimbologiaNoSoportada:
+        raise
+    except Exception as e:
+        raise RuntimeError(u"fallo en %s: %s: %s"
+                           % (que, type(e).__name__, _texto_error(e)))
+
+
 def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
     """Genera un .lyr desde una CapaEstilo del modelo.
 
@@ -622,10 +651,11 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
         # aviso de divergencia de abajo. Se calculan SOLO si faltan: son datos
         # del usuario y CalculateStatistics reescribe sus sidecars (.aux.xml) en
         # cada pasada; en una carpeta sincronizada eso dispara un resync inutil.
-        try:
-            arcpy.GetRasterProperties_management(ruta_dato, "MINIMUM")
-        except Exception:
-            arcpy.CalculateStatistics_management(ruta_dato)
+        with _paso(u"estadisticas del raster"):
+            try:
+                arcpy.GetRasterProperties_management(ruta_dato, "MINIMUM")
+            except Exception:
+                arcpy.CalculateStatistics_management(ruta_dato)
 
     if isinstance(capa_estilo.renderer, RendererRasterEstirado):
         # El estirado usa el min/max del DATASET (StretchType MinimumMaximum).
@@ -660,7 +690,8 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
     if os.path.exists(base):
         os.remove(base)
     if es_raster:
-        arcpy.MakeRasterLayer_management(ruta_dato, tmp_layer)
+        with _paso(u"abrir el raster"):
+            arcpy.MakeRasterLayer_management(ruta_dato, tmp_layer)
     elif capa_estilo.defquery:
         arcpy.MakeFeatureLayer_management(ruta_dato, tmp_layer,
                                           capa_estilo.defquery)
@@ -675,7 +706,13 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
         layer.Name = capa_estilo.nombre
     if es_raster:
         rl = _qi_exig(layer, CA.IRasterLayer)
-        rl.Renderer = _renderer_raster(capa_estilo.renderer, rl.Raster)
+        minimo = None
+        if isinstance(capa_estilo.renderer, RendererRasterCortes):
+            minimo = _prop_raster(arcpy, ruta_dato, "MINIMUM")
+        with _paso(u"renderer %s del raster"
+                   % type(capa_estilo.renderer).__name__):
+            rl.Renderer = _renderer_raster(capa_estilo.renderer, rl.Raster,
+                                           minimo)
     else:
         _qi_exig(layer, CA.IGeoFeatureLayer).Renderer = _renderer(
             capa_estilo.renderer)

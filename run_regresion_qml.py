@@ -46,6 +46,13 @@ FILAS_NULOS = [(u"1", u"Forestal MUP"), (u"1", u""), (u"1", None),
 GDB_NULOS = os.path.join(DIR_DATOS, "nulos.gdb")
 FC_NULOS = os.path.join(GDB_NULOS, "cuadros")
 SHP_NULOS = os.path.join(DIR_DATOS, "cuadros_nulos.shp")
+# Raster flotante SIN estadisticas: el caso de la pendiente de Majal Blanco.
+RASTER_CORTES = os.path.join(DIR_DATOS, "cortes.tif")
+# Sidecar que escribe GDAL (estadisticas aproximadas, SIN histograma), como el
+# que deja QGIS junto a un raster que ha abierto. Lo genera GDAL desde
+# tests/generar_fixtures_qgis.py; no se escribe a mano.
+AUX_GDAL_CORTES = os.path.join(RAIZ, "tests", "fixtures", "aux_gdal",
+                               "cortes.tif.aux.xml")
 
 # Nombre y ruta con tilde: es lo que reventaba el contrato del subproceso.
 NOMBRE_TILDE = u"Vías pecuarias"
@@ -104,6 +111,20 @@ def _preparar_datos():
         ras.save(RASTER)
         arcpy.DefineProjection_management(RASTER, sr)
         arcpy.CalculateStatistics_management(RASTER)
+
+    if not arcpy.Exists(RASTER_CORTES):
+        import numpy
+        arr = numpy.array([[1.5, 12.0, 25.0], [40.0, 7.0, 33.0],
+                           [18.0, 2.25, 45.0]], dtype="float32")
+        ras = arcpy.NumPyArrayToRaster(arr, arcpy.Point(600000, 4200000),
+                                       10, 10)
+        ras.save(RASTER_CORTES)
+        arcpy.DefineProjection_management(RASTER_CORTES, sr)
+        # Sin CalculateStatistics a proposito: cada caso decide que sidecar
+        # lleva el raster.
+        for sidecar in (RASTER_CORTES + ".aux.xml", RASTER_CORTES + ".xml"):
+            if os.path.exists(sidecar):
+                os.remove(sidecar)
 
     for ws, nombre, ruta in ((GDB_NULOS, "cuadros", FC_NULOS),
                              (DIR_DATOS, "cuadros_nulos.shp", SHP_NULOS)):
@@ -587,6 +608,48 @@ def caso_regla_desmarcada_simbolo_raro(fallos):
         fallos.append(u"se emitio la regla desmarcada")
 
 
+def caso_raster_cortes_aux_gdal(fallos):
+    """(16) Clases raster sobre un raster cuyas estadisticas las escribio GDAL
+    (sin histograma). Antes: `Update()` del renderer clasificado cascaba con
+    «Error no especificado» (la pendiente de 2 GB de Majal Blanco; no era ni el
+    tamano ni Drive). Ahora sale, con las etiquetas de QGIS, y sin reescribir
+    el sidecar del usuario."""
+    import shutil
+    carpeta = os.path.join(DIR_OUT, "cortes_aux_gdal")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    os.makedirs(carpeta)
+    for ext in (".tif", ".tfw"):
+        shutil.copy(RASTER_CORTES[:-4] + ext, carpeta)
+    raster = os.path.join(carpeta, "cortes.tif")
+    shutil.copy(AUX_GDAL_CORTES, raster + ".aux.xml")
+    antes = open(raster + ".aux.xml", "rb").read()
+
+    lyr = _salida(u"raster_cortes_aux_gdal.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"raster_cortes.qml"),
+                            raster, lyr])
+    datos = _json_estricto(out, fallos)
+    capa = ((datos or {}).get("capas") or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"no convirtio: %r" % capa)
+        return
+    rend = lyr_dump.dump_lyr(lyr).get("renderer") or {}
+    _igual(fallos, [c.get("label") for c in rend.get("clases", [])],
+           [u"llano", u"medio", u"fuerte"], u"etiquetas de las clases")
+    _igual(fallos, [c.get("corte_superior") for c in rend.get("clases", [])][:2],
+           [10.0, 30.0], u"cortes")
+    if open(raster + ".aux.xml", "rb").read() != antes:
+        fallos.append(u"el .aux.xml del usuario se reescribio")
+
+    # Un fallo de arcpy/ArcObjects dice en que paso ocurrio.
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"raster_cortes.qml"),
+                            os.path.join(carpeta, u"no_existe.tif"),
+                            _salida(u"raster_cortes_no_existe.lyr")])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if u"fallo en estadisticas del raster" not in (capa.get("error") or u""):
+        fallos.append(u"el error no nombra el paso: %r" % capa.get("error"))
+
+
 def caso_categoria_resto_nula(fallos):
     """(13) La categoria NULL de QGIS es "todos los demas valores": en ArcMap
     va al simbolo por defecto. Antes salia como clase "<Null>" y la entidad B
@@ -925,6 +988,7 @@ CASOS = [
     ("hexagono_equilatero", caso_hexagono_equilatero),
     ("categoria_oculta", caso_categoria_oculta),
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
+    ("raster_cortes_aux_gdal", caso_raster_cortes_aux_gdal),
     ("categoria_resto_nula", caso_categoria_resto_nula),
     ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),
