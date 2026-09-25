@@ -328,6 +328,19 @@ def dump_lyr(ruta_lyr):
             resultado["wms"] = {"url": props.GetProperty(u"URL"),
                                 "encendidas": _wms_encendidas(layer, True)}
             return resultado
+        wmts = _qi(layer, CA.IWMTSLayer)
+        if wmts is not None:
+            from comtypes.client import GetModule
+            GetModule(_lib_path() + "esriGISClient.olb")
+            import comtypes.gen.esriGISClient as GC
+            props = _qi(wmts.DataSourceName,
+                        GC.IWMTSConnectionName).ConnectionProperties
+            resultado["wmts"] = {"url": props.GetProperty(u"URL"),
+                                 "capa": wmts.LayerName,
+                                 "matriz": wmts.TileMatrixSet,
+                                 "estilo": wmts.Style,
+                                 "formato": wmts.ImageFormat}
+            return resultado
         rl = _qi(layer, CA.IRasterLayer)
         if rl is not None:
             resultado["renderer"] = _dump_renderer_raster(rl.Renderer)

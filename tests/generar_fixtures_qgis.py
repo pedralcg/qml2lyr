@@ -454,6 +454,15 @@ def qgz_batch_wms():
                 sys.exit("capa WMS no valida: %s" % capa.error().summary())
             capa.renderer().setOpacity(opacidad)
             proyecto.addMapLayer(capa)
+        # WMTS pidiendo la matriz EPSG:25830, que NO es la primera del
+        # servicio (ArcObjects se queda con la primera si no se fija).
+        wmts = QgsRasterLayer(
+            "crs=EPSG:25830&format=image/png&layers=mapa&styles=default&"
+            "tileMatrixSet=EPSG:25830&url=" + wms_local.URL_WMTS,
+            "WMTS mapa", "wms")
+        if not wmts.isValid():
+            sys.exit("capa WMTS no valida: %s" % wmts.error().summary())
+        proyecto.addMapLayer(wmts)
         metadatos = proyecto.metadata()
         metadatos.setAuthor("qml2lyr tests")
         proyecto.setMetadata(metadatos)

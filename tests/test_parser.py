@@ -259,7 +259,8 @@ def test_expresion_multicampo(fallos):
 
 def test_wms(fallos):
     """QGIS 3.44.12 (fixture contra el WMS local): url, layers= en orden,
-    opacidad del rasterrenderer. WMTS y XYZ se rechazan diciendo por que."""
+    opacidad del rasterrenderer; el WMTS con su capa y su matriz. XYZ se
+    rechaza diciendo por que."""
     capas = dict((ml.findtext("layername"), parser_qgis.parse_maplayer(ml)[0])
                  for ml in parser_qgis._raiz_qgs(QGZ_WMS).iter("maplayer")
                  if ml.findtext("layername"))
@@ -281,12 +282,14 @@ def test_wms(fallos):
     wmts = (u"contextualWMSLegend=0&crs=EPSG:25830&dpiMode=7&featureCount=10&"
             u"format=image/png&layers=MTN&styles=default&tileMatrixSet="
             u"EPSG:25830&url=http://www.ign.es/wmts/mapa-raster")
-    try:
-        parser_qgis.parse_maplayer(_capa(wmts))
-        fallos.append(u"un WMTS deberia rechazarse")
-    except SimbologiaNoSoportada as e:
-        if u"wms-inspire/mapa-raster" not in unicode(e):
-            fallos.append(u"no propone el WMS del IGN: %s" % e)
+    ign = parser_qgis.parse_maplayer(_capa(wmts))[0].servicio
+    _igual(fallos, (type(ign).__name__, ign.url, ign.capa, ign.matriz,
+                    ign.estilo, ign.formato),
+           (u"ServicioWMTS", u"http://www.ign.es/wmts/mapa-raster", u"MTN",
+            u"EPSG:25830", u"default", u"image/png"), u"WMTS del IGN")
+    mapa = capas[u"WMTS mapa"].servicio
+    _igual(fallos, (mapa.capa, mapa.matriz), (u"mapa", u"EPSG:25830"),
+           u"WMTS del fixture")
     try:
         parser_qgis.parse_maplayer(_capa(
             u"type=xyz&url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/%7By%7D.png"))

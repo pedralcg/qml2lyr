@@ -881,9 +881,18 @@ def _caso_batch_wms(fallos, salida, wms_local):
     if datos is None:
         fallos.append(u"stderr: %s" % err.decode("utf-8", "replace")[:400])
         return
-    _igual(fallos, datos.get("resumen"), {u"ok": 3, u"error": 0, u"total": 3},
+    _igual(fallos, datos.get("resumen"), {u"ok": 4, u"error": 0, u"total": 4},
            u"resumen")
     por_nombre = dict((c.get("nombre"), c) for c in datos.get("capas") or [])
+    wmts = por_nombre.get(u"WMTS mapa") or {}
+    if not wmts.get("ok"):
+        fallos.append(u"el WMTS no salio: %r" % wmts)
+    else:
+        # La matriz pedida, no la primera del servicio (EPSG:4326).
+        _igual(fallos, lyr_dump.dump_lyr(wmts["salida"]).get("wmts"),
+               {u"url": wms_local.URL_WMTS, u"capa": u"mapa",
+                u"matriz": u"EPSG:25830", u"estilo": u"default",
+                u"formato": u"image/png"}, u"WMTS en el .lyr")
     esperadas = {u"WMS dos hojas": [u"textos", u"parcelas"],
                  u"WMS grupo": [u"textos", u"masas", u"parcelas"],
                  u"WMS con una que falta": [u"masas"]}

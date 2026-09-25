@@ -298,6 +298,18 @@ class ServicioWMS(object):
         self.crs = crs
 
 
+class ServicioWMTS(object):
+    """Capa WMTS de QGIS -> WMTSLayer de ArcMap. Como ServicioWMS: va en
+    `CapaEstilo.servicio` y no tiene renderer."""
+
+    def __init__(self, url, capa, matriz, estilo=None, formato=None):
+        self.url = url
+        self.capa = capa            # identificador de la capa (`layers=`)
+        self.matriz = matriz        # TileMatrixSet (`tileMatrixSet=`)
+        self.estilo = estilo
+        self.formato = formato
+
+
 class SimbologiaNoSoportada(Exception):
     """Variante de simbologia QGIS que el parser no sabe traducir.
 

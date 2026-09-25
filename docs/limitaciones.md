@@ -52,8 +52,11 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   avisa). Convertir **necesita red**: la conexión lee el `GetCapabilities`.
   Una subcapa que el servicio ya no ofrece se avisa; si no queda ninguna, la
   capa falla.
-- **WMTS y teselas XYZ**: se rechazan diciendo qué son. Para el WMTS del IGN
-  (`mapa-raster`) el mensaje propone su WMS equivalente, sin sustituirlo.
+- **WMTS** (solo `--batch`, desde 2026-09-25): sale un `.lyr` con un
+  `WMTSLayer` con la capa, la **matriz de teselas**, el estilo y el formato que
+  pide QGIS. Necesita red, como el WMS. Probado con el `mapa-raster` del IGN.
+- **Teselas XYZ**: se rechazan diciendo qué son (ArcMap 10.5 no tiene ese tipo
+  de capa).
 - **GeoPackage**: **sí se convierte** desde 2026-09-20. arcpy 10.5 abre la capa
   como `ruta.gpkg\main.<layername>` (verificado con `MakeFeatureLayer` y con una
   emisión completa a `.lyr`). Requisito: que el origen de la capa en QGIS diga

@@ -128,8 +128,8 @@ nulos que QGIS convierte en `''` se emiten además como `<Null>` y `' '`,
 agrupados con `AddReferenceValue` (`parser_qgis._expresion_multicampo`).
 Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
-Servicios: **WMS** en `--batch` (`CapaEstilo.servicio`, sin renderer) → `.lyr` con
-`WMSMapLayer`; WMTS y XYZ se rechazan.
+Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr` con
+`WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza.
 
 ## Gotchas críticos (no redescubrir)
 
@@ -266,6 +266,12 @@ Servicios: **WMS** en `--batch` (`CapaEstilo.servicio`, sin renderer) → `.lyr`
   `IWMSGroupLayer`. La URL guardada se lee de `IDataLayer.DataSourceName` →
   `IWMSConnectionName.ConnectionProperties`. Abrir un `.lyr` WMS **reconecta**:
   el test mantiene vivo el WMS local (`tests/wms_local.py`) mientras vuelca.
+- **WMTS**: `WMTSLayer` está en esriCarto y `WMTSConnectionName` en
+  esriGISClient. Al conectar se queda con la **primera matriz de teselas** del
+  servicio (EPSG:4326 en el IGN) aunque el PropertySet lleve `TILEMATRIXSET`:
+  `TileMatrixSet`, `Style` e `ImageFormat` se fijan en la capa **después** de
+  `Connect` y se leen de vuelta. El WMTS local de los tests pone la 4326 primero
+  para cazarlo.
 - **Estadísticas del ráster**: `CalculateStatistics` reescribe los sidecars
   `.aux.xml` en cada pasada (resync inútil en una carpeta sincronizada). Se
   calcula solo si `GetRasterProperties` falla.

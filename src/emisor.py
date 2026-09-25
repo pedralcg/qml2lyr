@@ -25,7 +25,8 @@ from modelo import (SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
                     RendererSimple, RendererValoresUnicos, RendererGraduado,
                     RendererRasterValoresUnicos, RendererRasterCortes,
-                    RendererRasterEstirado, SimbologiaNoSoportada)
+                    RendererRasterEstirado, ServicioWMTS,
+                    SimbologiaNoSoportada)
 
 # Directorio temporal de la emision en curso: lo fija emitir() y lo consume la
 # rama de relleno con imagen de _simbolo() (necesita volcar el PNG a fichero,
@@ -597,6 +598,72 @@ def _emitir_wms(capa_estilo, ruta_lyr_salida):
             u"subcapas que QGIS pide y el WMS ya no ofrece: %s"
             % u", ".join(faltan))
     capa.Visible = True
+    return _guardar_capa_servicio(capa_estilo, capa, ruta_lyr_salida)
+
+
+@contextlib.contextmanager
+def _paso(que):
+    """Pone nombre al paso en el que falla ArcObjects/arcpy. Un COMError
+    «Error no especificado» a secas no dice si fallo abrir el dato, las
+    estadisticas o el renderer. Lo no soportado pasa tal cual."""
+    try:
+        yield
+    except SimbologiaNoSoportada:
+        raise
+    except Exception as e:
+        raise RuntimeError(u"fallo en %s: %s: %s"
+                           % (que, type(e).__name__, _texto_error(e)))
+
+
+def _emitir_wmts(capa_estilo, ruta_lyr_salida):
+    """CapaEstilo con un ServicioWMTS -> .lyr con un WMTSLayer conectado.
+
+    GOTCHA (medido con el WMTS del IGN, 2026-09-25): al conectar, ArcObjects
+    se queda con la PRIMERA matriz de teselas del servicio (EPSG:4326 en el
+    IGN) aunque el PropertySet lleve TILEMATRIXSET. La matriz, el estilo y el
+    formato se fijan en la capa DESPUES de conectar y se leen de vuelta."""
+    from comtypes.client import GetModule
+    GetModule(_lib_path() + "esriGISClient.olb")
+    import comtypes.gen.esriGISClient as GC
+    import comtypes.gen.esriSystem as S
+    _, CA = _mods()
+    servicio = capa_estilo.servicio
+    props = _nobj(S.PropertySet, S.IPropertySet)
+    props.SetProperty(u"URL", servicio.url)
+    props.SetProperty(u"LAYERNAME", servicio.capa)
+    conexion = _nobj(GC.WMTSConnectionName, GC.IWMTSConnectionName)
+    conexion.ConnectionProperties = props
+    wmts = _nobj(CA.WMTSLayer, CA.IWMTSLayer)
+    try:
+        conectado = wmts.Connect(_qi_exig(conexion, S.IName))
+        motivo = u"Connect devolvio False"
+    except Exception as e:
+        conectado, motivo = False, _texto_error(e)
+    if not conectado:
+        raise RuntimeError(u"no se pudo conectar al WMTS %s, capa %s (sin "
+                           u"red, o el servicio no la ofrece): %s"
+                           % (servicio.url, servicio.capa, motivo))
+    pedido = [(u"TileMatrixSet", servicio.matriz),
+              (u"Style", servicio.estilo), (u"ImageFormat", servicio.formato)]
+    for propiedad, valor in pedido:
+        if not valor:
+            continue
+        try:
+            setattr(wmts, propiedad, valor)
+        except Exception as e:
+            raise RuntimeError(u"el WMTS no acepta %s=%s: %s"
+                               % (propiedad, valor, _texto_error(e)))
+        if getattr(wmts, propiedad) != valor:
+            raise RuntimeError(u"el WMTS dejo %s=%s y QGIS pide %s"
+                               % (propiedad, getattr(wmts, propiedad), valor))
+    capa = _qi_exig(wmts, CA.ILayer)
+    capa.Visible = True
+    return _guardar_capa_servicio(capa_estilo, capa, ruta_lyr_salida)
+
+
+def _guardar_capa_servicio(capa_estilo, capa, ruta_lyr_salida):
+    """Nombre, opacidad y escalas de la capa de servicio, y al .lyr."""
+    _, CA = _mods()
     if capa_estilo.nombre:
         capa.Name = capa_estilo.nombre
     if abs(capa_estilo.opacidad - 1.0) > 1e-6:
@@ -616,20 +683,6 @@ def _emitir_wms(capa_estilo, ruta_lyr_salida):
     return ruta_lyr_salida
 
 
-@contextlib.contextmanager
-def _paso(que):
-    """Pone nombre al paso en el que falla ArcObjects/arcpy. Un COMError
-    «Error no especificado» a secas no dice si fallo abrir el dato, las
-    estadisticas o el renderer. Lo no soportado pasa tal cual."""
-    try:
-        yield
-    except SimbologiaNoSoportada:
-        raise
-    except Exception as e:
-        raise RuntimeError(u"fallo en %s: %s: %s"
-                           % (que, type(e).__name__, _texto_error(e)))
-
-
 def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
     """Genera un .lyr desde una CapaEstilo del modelo.
 
@@ -638,6 +691,8 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
     Una capa de servicio (WMS) no tiene dato: `ruta_dato` se ignora.
     """
     _init_arcobjects()
+    if isinstance(getattr(capa_estilo, "servicio", None), ServicioWMTS):
+        return _emitir_wmts(capa_estilo, ruta_lyr_salida)
     if getattr(capa_estilo, "servicio", None) is not None:
         return _emitir_wms(capa_estilo, ruta_lyr_salida)
     import arcpy

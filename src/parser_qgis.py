@@ -29,7 +29,7 @@ from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     RendererGraduado, RendererRasterValoresUnicos,
                     ClaseCorteRaster, RendererRasterCortes,
                     ParadaColor, RendererRasterEstirado, CapaEstilo,
-                    ServicioWMS, SimbologiaNoSoportada)
+                    ServicioWMS, ServicioWMTS, SimbologiaNoSoportada)
 
 try:
     from urllib import unquote as _unquote  # py2.7 (el motor)
@@ -1491,14 +1491,6 @@ def _aplicar_cabecera(capas, cabecera, datasource=None, defquery=None):
     return capas
 
 
-#: WMTS de los que se sabe que tienen un WMS que sirve lo mismo (comprobado
-#: a mano: 2026-09-25, IGN en el MXD de Majal Blanco). Solo se PROPONE en el
-#: mensaje: sustituir un servicio por otro en silencio no es convertir.
-_WMS_EQUIVALENTE = {
-    u"www.ign.es/wmts/mapa-raster": u"https://www.ign.es/wms-inspire/mapa-raster",
-}
-
-
 def _parametros_uri(datasource):
     """URI de proveedor de QGIS (`clave=valor&clave=valor`) -> lista de pares,
     en orden y con las claves repetidas (`layers=` y `styles=` lo son)."""
@@ -1511,8 +1503,8 @@ def _parametros_uri(datasource):
 
 
 def _servicio_wms(maplayer_elem, nombre, avisos):
-    """<maplayer> con proveedor `wms` -> ServicioWMS, o SimbologiaNoSoportada
-    si es un WMTS o un XYZ (el mismo proveedor de QGIS sirve los tres)."""
+    """<maplayer> con proveedor `wms` -> ServicioWMS o ServicioWMTS (el mismo
+    proveedor de QGIS sirve los dos); SimbologiaNoSoportada si es un XYZ."""
     pares = _parametros_uri(maplayer_elem.findtext("datasource"))
     params = dict(pares)
     url = params.get(u"url")
@@ -1520,14 +1512,6 @@ def _servicio_wms(maplayer_elem, nombre, avisos):
         raise SimbologiaNoSoportada(
             u"'%s' es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
             u"tipo de capa para ellas" % (nombre, url))
-    if u"tileMatrixSet" in params:
-        sin_esquema = re.sub(u"^https?://", u"", url or u"").rstrip(u"/")
-        wms = _WMS_EQUIVALENTE.get(sin_esquema)
-        propuesta = (u" El mismo servicio tiene WMS: %s (anadelo en QGIS como "
-                     u"WMS y vuelve a convertir)" % wms) if wms else u""
-        raise SimbologiaNoSoportada(
-            u"'%s' es un WMTS (%s): qml2lyr solo convierte WMS.%s"
-            % (nombre, url, propuesta))
     if not url:
         raise SimbologiaNoSoportada(u"capa WMS '%s' sin url= en el origen de "
                                     u"datos" % nombre)
@@ -1535,6 +1519,16 @@ def _servicio_wms(maplayer_elem, nombre, avisos):
     if not capas:
         raise SimbologiaNoSoportada(u"capa WMS '%s' sin layers=: no se sabe "
                                     u"que subcapas encender" % nombre)
+    if params.get(u"tileMatrixSet"):
+        # WMTS: una capa y una matriz de teselas (QGIS no pide mas de una).
+        if len(capas) > 1:
+            raise SimbologiaNoSoportada(
+                u"WMTS '%s' con varias capas (%s): un WMTS sirve una"
+                % (nombre, u", ".join(capas)))
+        return ServicioWMTS(url=url, capa=capas[0],
+                            matriz=params[u"tileMatrixSet"],
+                            estilo=params.get(u"styles") or None,
+                            formato=params.get(u"format"))
     estilos = [v for k, v in pares if k == u"styles"]
     if any(estilos):
         avisos.append(u"estilos WMS (%s) no trasladados: ArcMap pide cada "
