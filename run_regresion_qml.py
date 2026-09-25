@@ -39,6 +39,22 @@ SHP_PUNTOS = os.path.join(DIR_DATOS, "puntos.shp")
 RASTER = os.path.join(DIR_DATOS, "paleta.tif")
 GPKG = os.path.join(DIR_DATOS, "zonas.gpkg")
 GPKG_CAPA = GPKG + u"\\main.zonas"
+# Dos campos de texto con nulos: G y R. En la geodatabase son NULL de verdad;
+# el shapefile no los guarda y lleva '' (ArcMap lo lee ' ', QGIS NULL).
+FILAS_NULOS = [(u"1", u"Forestal MUP"), (u"1", u""), (u"1", None),
+               (None, u"Rural"), (None, None), (u"9", u"Otro")]
+GDB_NULOS = os.path.join(DIR_DATOS, "nulos.gdb")
+FC_NULOS = os.path.join(GDB_NULOS, "cuadros")
+SHP_NULOS = os.path.join(DIR_DATOS, "cuadros_nulos.shp")
+RASTER_RGB = os.path.join(DIR_DATOS, "rgb.tif")
+RASTER_RGB16 = os.path.join(DIR_DATOS, "rgb16.tif")
+# Raster flotante SIN estadisticas: el caso de la pendiente de Majal Blanco.
+RASTER_CORTES = os.path.join(DIR_DATOS, "cortes.tif")
+# Sidecar que escribe GDAL (estadisticas aproximadas, SIN histograma), como el
+# que deja QGIS junto a un raster que ha abierto. Lo genera GDAL desde
+# tests/generar_fixtures_qgis.py; no se escribe a mano.
+AUX_GDAL_CORTES = os.path.join(RAIZ, "tests", "fixtures", "aux_gdal",
+                               "cortes.tif.aux.xml")
 
 # Nombre y ruta con tilde: es lo que reventaba el contrato del subproceso.
 NOMBRE_TILDE = u"Vías pecuarias"
@@ -97,6 +113,68 @@ def _preparar_datos():
         ras.save(RASTER)
         arcpy.DefineProjection_management(RASTER, sr)
         arcpy.CalculateStatistics_management(RASTER)
+
+    if not arcpy.Exists(RASTER_CORTES):
+        import numpy
+        arr = numpy.array([[1.5, 12.0, 25.0], [40.0, 7.0, 33.0],
+                           [18.0, 2.25, 45.0]], dtype="float32")
+        ras = arcpy.NumPyArrayToRaster(arr, arcpy.Point(600000, 4200000),
+                                       10, 10)
+        ras.save(RASTER_CORTES)
+        arcpy.DefineProjection_management(RASTER_CORTES, sr)
+        # Sin CalculateStatistics a proposito: cada caso decide que sidecar
+        # lleva el raster.
+        for sidecar in (RASTER_CORTES + ".aux.xml", RASTER_CORTES + ".xml"):
+            if os.path.exists(sidecar):
+                os.remove(sidecar)
+
+    # Rasters de 3 bandas con los mismos valores: rgb.tif en 8 bits (como las
+    # ortos) y rgb16.tif en 16 bits sin signo. ArcMap estira distinto segun el
+    # tipo (medido, ver emisor._renderer_rgb). CompositeBands saca 16 bits
+    # aunque las bandas sean de 8: el de 8 se fuerza con CopyRaster.
+    if not arcpy.Exists(RASTER_RGB) or not arcpy.Exists(RASTER_RGB16):
+        import numpy
+        bandas = []
+        for i in range(3):
+            arr = numpy.array([[0, 128, 255], [64, 192, 32], [255, 0, 128]],
+                              dtype="uint8")
+            banda = os.path.join(DIR_DATOS, "rgb_b%d.tif" % i)
+            arcpy.NumPyArrayToRaster(numpy.roll(arr, i), arcpy.Point(
+                600000, 4200000), 10, 10).save(banda)
+            bandas.append(banda)
+        for ruta in (RASTER_RGB, RASTER_RGB16):
+            if arcpy.Exists(ruta):
+                arcpy.Delete_management(ruta)
+        arcpy.CompositeBands_management(u";".join(bandas), RASTER_RGB16)
+        arcpy.DefineProjection_management(RASTER_RGB16, sr)
+        arcpy.CopyRaster_management(RASTER_RGB16, RASTER_RGB,
+                                    pixel_type="8_BIT_UNSIGNED")
+        for banda in bandas:
+            arcpy.Delete_management(banda)
+
+    for ws, nombre, ruta in ((GDB_NULOS, "cuadros", FC_NULOS),
+                             (DIR_DATOS, "cuadros_nulos.shp", SHP_NULOS)):
+        if ws == GDB_NULOS and not arcpy.Exists(GDB_NULOS):
+            arcpy.CreateFileGDB_management(DIR_DATOS, "nulos.gdb")
+        if arcpy.Exists(ruta):
+            continue
+        arcpy.CreateFeatureclass_management(ws, nombre, "POLYGON",
+                                            spatial_reference=sr)
+        for campo in ("G", "R"):
+            arcpy.AddField_management(ruta, campo, "TEXT", field_length=20,
+                                      field_is_nullable="NULLABLE")
+        es_shp = ruta.endswith(".shp")
+        cur = arcpy.da.InsertCursor(ruta, ["SHAPE@", "G", "R"])
+        for i, (g, r) in enumerate(FILAS_NULOS):
+            x = 600000 + i * 200
+            anillo = arcpy.Array([arcpy.Point(x, 4200000),
+                                  arcpy.Point(x + 100, 4200000),
+                                  arcpy.Point(x + 100, 4200100),
+                                  arcpy.Point(x, 4200100)])
+            if es_shp:
+                g, r = g or u"", r or u""
+            cur.insertRow([arcpy.Polygon(anillo, sr), g, r])
+        del cur
 
     if not os.path.exists(GPKG):
         # GeoPackage sintetico: es el contenedor multicapa que el plugin
@@ -162,6 +240,43 @@ def _igual(fallos, obtenido, esperado, que):
 
 def _salida(nombre):
     return os.path.join(DIR_OUT, nombre)
+
+
+def _color_por_entidad(ruta_lyr):
+    """Color (#rrggbb) que el renderer del .lyr da a cada entidad,
+    en orden de OID; None si no la dibuja.
+
+    Usa IFeatureRenderer.SymbolByFeature, que es lo que llama Draw: mide que
+    clase casa de verdad, no que valores lleva el renderer. Sin PrepareFilter
+    el renderer no resuelve sus campos y no casa nada (medido 2026-09-25)."""
+    import emisor
+    emisor._init_arcobjects()
+    D, CA = emisor._mods()
+    import comtypes.gen.esriGeoDatabase as G
+    lf = emisor._nobj(CA.LayerFile, CA.ILayerFile)
+    lf.Open(ruta_lyr)
+    capa = lf.Layer
+    fc = emisor._qi_exig(capa, CA.IFeatureLayer).FeatureClass
+    rend = emisor._qi_exig(capa, CA.IGeoFeatureLayer).Renderer
+    filtro = emisor._nobj(G.QueryFilter, G.IQueryFilter)
+    rend.PrepareFilter(fc, filtro)
+    cursor = fc.Search(filtro, False)
+    colores = []
+    entidad = cursor.NextFeature()
+    while entidad:
+        simbolo = rend.SymbolByFeature(entidad)
+        if not simbolo:
+            colores.append(None)
+        else:
+            con_color = (emisor._qi(simbolo, D.IFillSymbol)
+                         or emisor._qi(simbolo, D.ILineSymbol)
+                         or emisor._qi_exig(simbolo, D.IMarkerSymbol))
+            bgr = con_color.Color.RGB
+            colores.append(u"#%02x%02x%02x" % (bgr & 0xFF, (bgr >> 8) & 0xFF,
+                                               (bgr >> 16) & 0xFF))
+        entidad = cursor.NextFeature()
+    lf.Close()
+    return colores
 
 
 # --------------------------------------------------------------------- casos
@@ -519,6 +634,298 @@ def caso_regla_desmarcada_simbolo_raro(fallos):
         fallos.append(u"se emitio la regla desmarcada")
 
 
+def caso_raster_cortes_aux_gdal(fallos):
+    """(16) Clases raster sobre un raster cuyas estadisticas las escribio GDAL
+    (sin histograma). Antes: `Update()` del renderer clasificado cascaba con
+    «Error no especificado» (la pendiente de 2 GB de Majal Blanco; no era ni el
+    tamano ni Drive). Ahora sale, con las etiquetas de QGIS, y sin reescribir
+    el sidecar del usuario."""
+    import shutil
+    carpeta = os.path.join(DIR_OUT, "cortes_aux_gdal")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    os.makedirs(carpeta)
+    for ext in (".tif", ".tfw"):
+        shutil.copy(RASTER_CORTES[:-4] + ext, carpeta)
+    raster = os.path.join(carpeta, "cortes.tif")
+    shutil.copy(AUX_GDAL_CORTES, raster + ".aux.xml")
+    antes = open(raster + ".aux.xml", "rb").read()
+
+    lyr = _salida(u"raster_cortes_aux_gdal.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"raster_cortes.qml"),
+                            raster, lyr])
+    datos = _json_estricto(out, fallos)
+    capa = ((datos or {}).get("capas") or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"no convirtio: %r" % capa)
+        return
+    rend = lyr_dump.dump_lyr(lyr).get("renderer") or {}
+    _igual(fallos, [c.get("label") for c in rend.get("clases", [])],
+           [u"llano", u"medio", u"fuerte"], u"etiquetas de las clases")
+    _igual(fallos, [c.get("corte_superior") for c in rend.get("clases", [])][:2],
+           [10.0, 30.0], u"cortes")
+    if open(raster + ".aux.xml", "rb").read() != antes:
+        fallos.append(u"el .aux.xml del usuario se reescribio")
+
+    # Un fallo de arcpy/ArcObjects dice en que paso ocurrio.
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"raster_cortes.qml"),
+                            os.path.join(carpeta, u"no_existe.tif"),
+                            _salida(u"raster_cortes_no_existe.lyr")])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if u"fallo en estadisticas del raster" not in (capa.get("error") or u""):
+        fallos.append(u"el error no nombra el paso: %r" % capa.get("error"))
+
+
+PLANTILLA_MXD = (u"C:\\Program Files (x86)\\ArcGIS\\Desktop10.5\\MapTemplates"
+                 u"\\Standard Page Sizes\\ISO (A) Page Sizes\\ISO A3 Landscape.mxd")
+
+
+def _pixeles_de_color(ruta_lyr, rgb, png):
+    """Cuantos pixeles de color `rgb` (+-40 por canal) salen al dibujar el
+    .lyr solo en un mapa estandar, encuadrado en su dato."""
+    import arcpy
+    mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    capa = arcpy.mapping.Layer(ruta_lyr)
+    arcpy.mapping.AddLayer(df, capa)
+    ext = arcpy.Describe(capa.dataSource).extent
+    df.extent = arcpy.Extent(ext.XMin - 100, ext.YMin - 100,
+                             ext.XMax + 100, ext.YMax + 100)
+    arcpy.mapping.ExportToPNG(mxd, png, df, df_export_width=800,
+                              df_export_height=400)
+    del mxd
+    a = arcpy.RasterToNumPyArray(png).astype("int32")
+    cerca = ((abs(a[0] - rgb[0]) < 40) & (abs(a[1] - rgb[1]) < 40)
+             & (abs(a[2] - rgb[2]) < 40))
+    return int(cerca.sum())
+
+
+def caso_etiquetas(fallos):
+    """(17) Etiquetas simples -> LabelEngineLayerProperties estandar: campo o
+    concatenacion, fuente, tamano, color, halo y escalas. Se comprueba el
+    volcado Y que se pintan (pixeles del texto y del halo en un render)."""
+    lyr = _salida(u"etiquetas_simples.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"etiquetas_simples.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"etiquetas_simples no convirtio: %r" % capa)
+        return
+    etiquetas = lyr_dump.dump_lyr(lyr).get("etiquetas")
+    _igual(fallos, etiquetas, [{
+        u"expresion": u"[TIPO]", u"fuente": u"Arial", u"tamano": 10.0,
+        u"negrita": True, u"cursiva": True,
+        u"color": {u"nulo": False, u"rgb": [18, 52, 86], u"transparencia": 255},
+        u"halo": {u"tamano": 2.835, u"color": {u"nulo": False,
+                  u"rgb": [255, 255, 0], u"transparencia": 255}},
+        u"escala_min": 50000.0, u"escala_max": 1000.0}],
+        u"etiquetas en el .lyr")
+    if not any(u"Maplex" in a for a in capa.get("avisos") or []):
+        fallos.append(u"sin el aviso de Maplex: %r" % capa.get("avisos"))
+    # Las escalas de etiqueta dejan fuera el encuadre del render: se pinta
+    # una copia sin ellas.
+    import arcpy
+    sin_escalas = _salida(u"etiquetas_render.lyr")
+    capa_map = arcpy.mapping.Layer(lyr)
+    capa_map.saveACopy(sin_escalas)
+    from emisor import _init_arcobjects, _mods, _nobj, _qi
+    _init_arcobjects()
+    _, CA = _mods()
+    lf = _nobj(CA.LayerFile, CA.ILayerFile)
+    lf.Open(sin_escalas)
+    ap = _qi(_qi(lf.Layer, CA.IGeoFeatureLayer).AnnotationProperties,
+             CA.IAnnotateLayerPropertiesCollection2).Properties[0]
+    ap.AnnotationMinimumScale = 0
+    ap.AnnotationMaximumScale = 0
+    lf.Save()
+    lf.Close()
+    texto = _pixeles_de_color(sin_escalas, (18, 52, 86),
+                              _salida(u"etiquetas_render.png"))
+    halo = _pixeles_de_color(sin_escalas, (255, 255, 0),
+                             _salida(u"etiquetas_render_halo.png"))
+    if texto < 50 or halo < 50:
+        fallos.append(u"las etiquetas no se pintan: %d px de texto, %d de halo"
+                      % (texto, halo))
+
+    lyr = _salida(u"etiquetas_expresion.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"etiquetas_expresion.qml"),
+                            FC_NULOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    etiquetas = lyr_dump.dump_lyr(lyr).get("etiquetas") or [{}]
+    _igual(fallos, (etiquetas[0].get("expresion"), etiquetas[0].get("tamano")),
+           (u'[G] & " - " & [R]', 8.504), u"etiqueta por concatenacion")
+
+    lyr = _salida(u"etiquetas_no_traducible.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML,
+                                         u"etiquetas_no_traducible.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    _igual(fallos, capa.get("ok"), True, u"la capa sale aunque la etiqueta no")
+    _igual(fallos, lyr_dump.dump_lyr(lyr).get("etiquetas"), None,
+           u"sin etiquetas si la expresion no se traduce")
+
+
+# Color que QGIS 3.44.12 da al centro de cada celda de rgb.tif (fila, columna)
+# con cada fixture, leido del render (2026-09-25).
+COLORES_QGIS_RGB = {
+    u"raster_rgb_sin_realce": [
+        [(0, 128, 0), (128, 0, 128), (255, 128, 0)],
+        [(64, 255, 128), (192, 64, 255), (32, 192, 64)],
+        [(255, 32, 192), (0, 255, 32), (128, 0, 255)]],
+    u"raster_rgb_estirado": [
+        [(0, 143, 0), (163, 0, 125), (0, 143, 255)],
+        [(163, 255, 51), (255, 65, 199), (81, 221, 13)],
+        [(244, 26, 255), (40, 255, 0), (255, 0, 125)]],
+    # Sobre rgb16.tif (mismos valores, 16 bits).
+    u"raster_rgb16_estirado": [
+        [(0, 132, 0), (147, 0, 117), (255, 132, 0)],
+        [(51, 255, 117), (243, 36, 255), (3, 228, 21)],
+        [(255, 0, 213), (0, 255, 0), (147, 0, 255)]],
+}
+
+
+def _colores_celdas_arcmap(ruta_lyr, png):
+    """Color que ArcMap pinta en el centro de cada celda de rgb.tif, situado
+    con el world file del PNG (ArcMap ajusta la extension al marco)."""
+    import arcpy
+    mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    df.spatialReference = arcpy.SpatialReference(25830)
+    arcpy.mapping.AddLayer(df, arcpy.mapping.Layer(ruta_lyr))
+    df.extent = arcpy.Extent(600000, 4200000, 600030, 4200030)
+    arcpy.mapping.ExportToPNG(mxd, png, df, df_export_width=300,
+                              df_export_height=300, world_file=True)
+    del mxd
+    a = arcpy.RasterToNumPyArray(png)
+    tfw = [float(v) for v in open(png[:-4] + ".pgw").read().split()]
+    colores = []
+    for fila in range(3):
+        colores.append([])
+        for col in range(3):
+            x, y = 600005 + 10 * col, 4200025 - 10 * fila
+            px = int(round((x - tfw[4]) / tfw[0]))
+            py = int(round((y - tfw[5]) / tfw[3]))
+            colores[-1].append(tuple(int(a[b, py, px]) for b in range(3)))
+    return colores
+
+
+def caso_raster_rgb(fallos):
+    """(19) RGB (multibandcolor): bandas (tambien cambiadas), sin realce o
+    estirado entre minimo y maximo por banda, en 8 y en 16 bits (ArcMap
+    estira distinto segun el tipo). El color de cada celda en ArcMap tiene
+    que ser el de QGIS (+-3). Realces mezclados: se rechaza. 16 bits sin
+    realce: sale, avisando de que el tramo bajo no se puede reproducir."""
+    esperados_volcado = {
+        u"raster_rgb_sin_realce": (RASTER_RGB, {
+            u"tipo": u"raster_rgb", u"bandas": [1, 2, 3],
+            u"estirado": u"ninguno"}),
+        u"raster_rgb_estirado": (RASTER_RGB, {
+            u"tipo": u"raster_rgb", u"bandas": [3, 2, 1],
+            u"estirado": u"minmax",
+            u"tramos": [[0.0, 200.0], [10.0, 220.0], [20.0, 240.0]]}),
+        u"raster_rgb16_estirado": (RASTER_RGB16, {
+            u"tipo": u"raster_rgb", u"bandas": [1, 2, 3],
+            u"estirado": u"minmax",
+            u"tramos": [[30.0, 200.0], [40.0, 210.0], [50.0, 220.0]]}),
+    }
+    for nombre, (raster, esperado) in sorted(esperados_volcado.items()):
+        lyr = _salida(nombre + u".lyr")
+        rc, out, err = _lanzar([os.path.join(DIR_QML, nombre + u".qml"),
+                                raster, lyr])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"%s no convirtio: %r" % (nombre, capa))
+            continue
+        _igual(fallos, lyr_dump.dump_lyr(lyr).get("renderer"), esperado,
+               u"volcado de %s" % nombre)
+        obtenidos = _colores_celdas_arcmap(lyr, _salida(nombre + u".png"))
+        for fila in range(3):
+            for col in range(3):
+                q = COLORES_QGIS_RGB[nombre][fila][col]
+                am = obtenidos[fila][col]
+                if max(abs(q[i] - am[i]) for i in range(3)) > 3:
+                    fallos.append(u"%s celda (%d,%d): QGIS %r, ArcMap %r"
+                                  % (nombre, fila, col, q, am))
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"raster_rgb_mixto.qml"),
+                            RASTER_RGB, _salida(u"raster_rgb_mixto.lyr")])
+    # El rechazo llega al parsear el .qml: va a nivel de documento.
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, (datos.get("ok"), datos.get("tipo_error")),
+           (False, u"SimbologiaNoSoportada"), u"realces mezclados")
+
+    rc, out, err = _lanzar([os.path.join(DIR_QML,
+                                         u"raster_rgb16_sin_realce.qml"),
+                            RASTER_RGB16, _salida(u"raster_rgb16_sin.lyr")])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    _igual(fallos, capa.get("ok"), True, u"16 bits sin realce sale")
+    if not any(u"mas oscuros" in a for a in capa.get("avisos") or []):
+        fallos.append(u"16 bits sin realce sin aviso: %r" % capa.get("avisos"))
+
+
+def caso_categoria_resto_nula(fallos):
+    """(13) La categoria NULL de QGIS es "todos los demas valores": en ArcMap
+    va al simbolo por defecto. Antes salia como clase "<Null>" y la entidad B
+    (sin categoria) no se dibujaba en ArcMap aunque QGIS si la pinta."""
+    lyr = _salida(u"categoria_resto_nula.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"categoria_resto_nula.qml"),
+                            SHP_POLIGONOS, lyr])
+    datos = _json_estricto(out, fallos)
+    if not datos or not datos.get("ok"):
+        fallos.append(u"no convirtio: %r / %s" % (datos, err[:300]))
+        return
+    rend = lyr_dump.dump_lyr(lyr).get("renderer") or {}
+    _igual(fallos, [c.get("valor") for c in rend.get("clases", [])], [u"A"],
+           u"clases (sin una clase <Null>)")
+    _igual(fallos, rend.get("usa_default"), True, u"usa el simbolo por defecto")
+    _igual(fallos, rend.get("default_label"), u"Todos los demas valores",
+           u"etiqueta del simbolo por defecto")
+    # poligonos.shp: A, B. QGIS pinta A en rojo y B con la categoria NULL.
+    _igual(fallos, _color_por_entidad(lyr), [u"#e41a1c", u"#999999"],
+           u"color que ArcMap da a cada entidad")
+
+
+# Color que QGIS 3.44.12 da a cada entidad de FILAS_NULOS con cada fixture,
+# leido con symbolForFeature sobre los mismos datos (2026-09-25). ArcMap tiene
+# que dar lo mismo. Con `||` un nulo anula el valor entero, y en el shapefile
+# QGIS lee '' como NULL: por eso la fila 2 cambia entre gdb y shp.
+_ROJO, _VERDE, _AZUL, _GRIS = u"#e41a1c", u"#4daf4a", u"#377eb8", u"#999999"
+COLORES_QGIS_MULTICAMPO = {
+    (u"categorizado_multicampo", u"gdb"): [_ROJO, _VERDE, _VERDE, _AZUL, _GRIS, _GRIS],
+    (u"categorizado_multicampo", u"shp"): [_ROJO, _VERDE, _VERDE, _AZUL, _GRIS, _GRIS],
+    (u"categorizado_multicampo_barras", u"gdb"): [_ROJO, _VERDE, _GRIS, _GRIS, _GRIS, _GRIS],
+    (u"categorizado_multicampo_barras", u"shp"): [_ROJO, _GRIS, _GRIS, _GRIS, _GRIS, _GRIS],
+}
+
+
+def caso_categorizado_multicampo(fallos):
+    """(14) Categorizado por concat de dos campos -> valores unicos de ArcMap de
+    2 campos con separador. Cada entidad tiene que recibir en ArcMap el mismo
+    color que en QGIS, tambien las que tienen nulos (geodatabase) o vacios
+    (shapefile)."""
+    for (qml, tipo), esperado in sorted(COLORES_QGIS_MULTICAMPO.items()):
+        dato = FC_NULOS if tipo == u"gdb" else SHP_NULOS
+        lyr = _salida(u"%s_%s.lyr" % (qml, tipo))
+        rc, out, err = _lanzar([os.path.join(DIR_QML, qml + u".qml"), dato, lyr])
+        datos = _json_estricto(out, fallos)
+        if not datos or not datos.get("ok"):
+            fallos.append(u"%s sobre %s no convirtio: %r / %s"
+                          % (qml, tipo, datos, err[:300]))
+            continue
+        rend = lyr_dump.dump_lyr(lyr).get("renderer") or {}
+        _igual(fallos, rend.get("campos"), [u"G", u"R"], u"campos de %s" % qml)
+        _igual(fallos, rend.get("separador"), u", ", u"separador de %s" % qml)
+        _igual(fallos, _color_por_entidad(lyr), esperado,
+               u"color por entidad de %s sobre %s" % (qml, tipo))
+        if qml == u"categorizado_multicampo":
+            agrupados = sorted((c["valor"], c["referencia"])
+                               for c in rend.get("clases", [])
+                               if "referencia" in c)
+            _igual(fallos, agrupados,
+                   [(u" , Rural", u", Rural"), (u"1,  ", u"1, "),
+                    (u"1, <Null>", u"1, "), (u"<Null>, Rural", u", Rural")],
+                   u"variantes de nulo agrupadas bajo su clase")
+
+
 # Batch sintetico: el .qgz lo escribio QGIS 3.44.12 con rutas RELATIVAS a los
 # datos de `tmp/regresion_qml/` (`tests/generar_fixtures_qgis.py`).
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
@@ -589,6 +996,198 @@ def caso_batch_sintetico(fallos):
                [u"cero", u"dos", u"uno"], u"clases de 'Paleta'")
 
     _volcado(u"Zonas GPKG")
+
+
+# Batch con rutas absolutas a una unidad que no existe (`Q:`); QGIS lo escribio
+# con esa unidad montada por `subst` (tests/generar_fixtures_qgis.py).
+QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
+UNIDAD_REMAP = u"Q:"
+DIR_OUT_REMAP = os.path.join(DIR_OUT, "remap")
+
+
+def caso_batch_remap(fallos):
+    """(12) --remap: el dato se LEE en el destino y el .lyr queda apuntando a
+    la unidad original, que no existe, con un aviso que lo dice. Sin --remap,
+    las mismas capas fallan por dato no encontrado."""
+    import shutil
+    import arcpy
+    if os.path.exists(UNIDAD_REMAP + u"\\"):
+        fallos.append(u"la unidad %s existe en esta maquina: el caso necesita "
+                      u"que no exista" % UNIDAD_REMAP)
+        return
+    if os.path.isdir(DIR_OUT_REMAP):
+        shutil.rmtree(DIR_OUT_REMAP)
+
+    rc, out, err = _lanzar([u"--batch", QGZ_REMAP, DIR_OUT_REMAP + u"_sin"])
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, datos.get("resumen"), {u"ok": 0, u"error": 3, u"total": 3},
+           u"resumen sin --remap")
+
+    rc, out, err = _lanzar([u"--batch", QGZ_REMAP, DIR_OUT_REMAP,
+                            u"--remap", u"%s=%s" % (UNIDAD_REMAP, DIR_DATOS)])
+    _igual(fallos, rc, 0, u"codigo de salida")
+    datos = _json_estricto(out, fallos)
+    if datos is None:
+        fallos.append(u"stderr del emisor: %s"
+                      % err.decode("utf-8", "replace")[:400])
+        return
+    _igual(fallos, datos.get("resumen"), {u"ok": 3, u"error": 0, u"total": 3},
+           u"resumen con --remap")
+    esperados = {u"Zonas remap": u"Q:\\poligonos.shp",
+                 u"Paleta remap": u"Q:\\paleta.tif",
+                 u"GPKG remap": u"Q:\\zonas.gpkg\\main.zonas"}
+    for capa in datos.get("capas") or []:
+        nombre = capa.get("nombre")
+        if not capa.get("ok"):
+            fallos.append(u"'%s' no salio: %r" % (nombre, capa))
+            continue
+        fuente = arcpy.mapping.Layer(capa["salida"]).dataSource
+        _igual(fallos, fuente.lower(), esperados.get(nombre, u"").lower(),
+               u"dataSource del .lyr de '%s'" % nombre)
+        _igual(fallos, capa.get("dato"), fuente, u"'dato' del JSON de '%s'"
+               % nombre)
+        if not any(u"no existe en esta maquina" in a
+                   for a in capa.get("avisos") or []):
+            fallos.append(u"'%s' no avisa de la unidad inexistente: %r"
+                          % (nombre, capa.get("avisos")))
+        if nombre == u"Zonas remap":
+            rend = lyr_dump.dump_lyr(capa["salida"]).get("renderer") or {}
+            _igual(fallos, sorted(c.get("valor") for c in rend.get("clases", [])),
+                   [u"A", u"B"], u"el reapuntado conserva las clases")
+        if nombre == u"Paleta remap":
+            rend = lyr_dump.dump_lyr(capa["salida"]).get("renderer") or {}
+            _igual(fallos, sorted(c.get("label") for c in rend.get("clases", [])),
+                   [u"cero", u"dos", u"uno"],
+                   u"el reapuntado conserva la paleta")
+
+    rc, out, err = _lanzar([u"--remap", u"Q:=C:\\x", SHP_POLIGONOS,
+                            SHP_POLIGONOS, _salida(u"remap_no.lyr")])
+    if rc == 0:
+        fallos.append(u"--remap fuera de --batch deberia rechazarse")
+
+
+QGZ_WMS = os.path.join(RAIZ, "tests", "fixtures", "batch_wms.qgz")
+
+
+def caso_batch_wms(fallos):
+    """(15) Capas WMS de QGIS -> .lyr de servicio con las subcapas de
+    `layers=` encendidas (y nada mas), contra el WMS local de los tests."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    salida = os.path.join(DIR_OUT, "wms")
+    if os.path.isdir(salida):
+        shutil.rmtree(salida)
+    # Vivo durante todo el caso: al reabrir el .lyr para volcarlo, ArcObjects
+    # se vuelve a conectar al servicio.
+    servidor = wms_local.arrancar()
+    try:
+        _caso_batch_wms(fallos, salida, wms_local)
+    finally:
+        servidor.shutdown()
+
+
+def _caso_batch_wms(fallos, salida, wms_local):
+    rc, out, err = _lanzar([u"--batch", QGZ_WMS, salida])
+    datos = _json_estricto(out, fallos)
+    if datos is None:
+        fallos.append(u"stderr: %s" % err.decode("utf-8", "replace")[:400])
+        return
+    _igual(fallos, datos.get("resumen"), {u"ok": 4, u"error": 0, u"total": 4},
+           u"resumen")
+    por_nombre = dict((c.get("nombre"), c) for c in datos.get("capas") or [])
+    wmts = por_nombre.get(u"WMTS mapa") or {}
+    if not wmts.get("ok"):
+        fallos.append(u"el WMTS no salio: %r" % wmts)
+    else:
+        # La matriz pedida, no la primera del servicio (EPSG:4326).
+        _igual(fallos, lyr_dump.dump_lyr(wmts["salida"]).get("wmts"),
+               {u"url": wms_local.URL_WMTS, u"capa": u"mapa",
+                u"matriz": u"EPSG:25830", u"estilo": u"default",
+                u"formato": u"image/png"}, u"WMTS en el .lyr")
+    esperadas = {u"WMS dos hojas": [u"textos", u"parcelas"],
+                 u"WMS grupo": [u"textos", u"masas", u"parcelas"],
+                 u"WMS con una que falta": [u"masas"]}
+    for nombre, encendidas in sorted(esperadas.items()):
+        capa = por_nombre.get(nombre) or {}
+        if not capa.get("ok"):
+            fallos.append(u"'%s' no salio: %r" % (nombre, capa))
+            continue
+        volcado = lyr_dump.dump_lyr(capa["salida"])
+        wms = volcado.get("wms") or {}
+        # Orden de ArcMap: el inverso de GetCapabilities (arriba lo que se
+        # dibuja encima).
+        _igual(fallos, wms.get("encendidas"), encendidas,
+               u"subcapas encendidas de '%s'" % nombre)
+        if wms_local.URL not in (wms.get("url") or u""):
+            fallos.append(u"url de '%s': %r" % (nombre, wms.get("url")))
+    _igual(fallos, lyr_dump.dump_lyr(
+        por_nombre[u"WMS dos hojas"]["salida"]).get("transparencia_pct"), 30,
+        u"transparencia de 'WMS dos hojas'")
+    avisos = (por_nombre.get(u"WMS con una que falta") or {}).get("avisos") or []
+    if not any(u"no_existe" in a for a in avisos):
+        fallos.append(u"no avisa de la subcapa que falta: %r" % avisos)
+
+
+QGZ_MXD = os.path.join(RAIZ, "tests", "fixtures", "proyecto_mxd.qgz")
+
+
+def caso_modo_mxd(fallos):
+    """(18) --mxd: el .qgz entero a un .mxd con el mismo arbol (grupos
+    anidados, orden, visibilidad), SRC y extension; lo que no convierte
+    se omite y se lista, el grupo que se queda vacio tambien, y el RGB entra
+    con aviso. No sobrescribe."""
+    import shutil
+    import arcpy
+    carpeta = os.path.join(DIR_OUT, "mxd")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    mxd = os.path.join(carpeta, u"proyecto.mxd")
+    rc, out, err = _lanzar([u"--mxd", QGZ_MXD, mxd])
+    datos = _json_estricto(out, fallos)
+    if not datos or not datos.get("ok"):
+        fallos.append(u"el modo --mxd fallo: %r / %s"
+                      % (datos, err.decode("utf-8", "replace")[:400]))
+        return
+    _igual(fallos, rc, 0, u"codigo de salida")
+    _igual(fallos, datos["verificacion"]["arbol"], [
+        u"x Zonas por tipo", u"x Grupo A", u"- Grupo A\\Solo rios",
+        u"- Grupo A\\Sub B", u"x Grupo A\\Sub B\\Paleta", u"- RGB"],
+        u"arbol del MXD reabierto")
+    _igual(fallos, sorted(o["nombre"] for o in datos["omitidas"]),
+           [u"Hitos flecha", u"Hitos flecha 2", u"[grupo] Solo fallos"],
+           u"omitidas")
+    # El RGB se convierte como cualquier capa (desde su .lyr), sin el
+    # respaldo de «render por defecto».
+    rgb = [c for c in datos["capas"] if c.get("nombre") == u"RGB"]
+    if not rgb or not rgb[0].get("en_mxd"):
+        fallos.append(u"el RGB no entro convertido: %r" % rgb)
+    if any(u"'RGB'" in a for a in datos["avisos"]):
+        fallos.append(u"el RGB uso el respaldo: %r" % datos["avisos"])
+    _igual(fallos, datos["verificacion"]["rutas_relativas"], True,
+           u"rutas relativas")
+    _igual(fallos, datos["verificacion"]["rotas"], [], u"fuentes rotas")
+    if not os.path.isdir(datos.get("dir_lyr") or u""):
+        fallos.append(u"no esta la carpeta de .lyr: %r" % datos.get("dir_lyr"))
+    doc = arcpy.mapping.MapDocument(mxd)
+    df = arcpy.mapping.ListDataFrames(doc)[0]
+    _igual(fallos, df.spatialReference.factoryCode, 25830, u"SRC del marco")
+    e = df.extent
+    # ArcMap ajusta la extension a la proporcion del marco: debe CONTENER la
+    # del proyecto y estar centrada en ella.
+    if not (e.XMin <= 599900 + 1 and e.XMax >= 600500 - 1 and
+            e.YMin <= 4199900 + 1 and e.YMax >= 4200300 - 1) or \
+            abs((e.XMin + e.XMax) / 2 - 600200) > 1:
+        fallos.append(u"extension del marco: %s" % e)
+    paleta = [c for c in arcpy.mapping.ListLayers(doc) if c.name == u"Paleta"]
+    if not paleta or not paleta[0].visible:
+        fallos.append(u"'Paleta' deberia estar encendida dentro de 'Sub B'")
+    del doc
+
+    rc, out, err = _lanzar([u"--mxd", QGZ_MXD, mxd])
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, (rc, datos.get("tipo_error")), (2, u"SalidaExiste"),
+           u"no sobrescribe un .mxd existente")
 
 
 def caso_parser_sin_arcobjects(fallos):
@@ -671,7 +1270,15 @@ CASOS = [
     ("hexagono_equilatero", caso_hexagono_equilatero),
     ("categoria_oculta", caso_categoria_oculta),
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
+    ("raster_cortes_aux_gdal", caso_raster_cortes_aux_gdal),
+    ("etiquetas", caso_etiquetas),
+    ("raster_rgb", caso_raster_rgb),
+    ("categoria_resto_nula", caso_categoria_resto_nula),
+    ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),
+    ("batch_remap", caso_batch_remap),
+    ("batch_wms", caso_batch_wms),
+    ("modo_mxd", caso_modo_mxd),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
 

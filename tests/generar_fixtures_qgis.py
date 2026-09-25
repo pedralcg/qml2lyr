@@ -230,6 +230,200 @@ def qml_reglas_avisos_por_regla():
     _guardar_qml(capa, "reglas_avisos_por_regla.qml")
 
 
+def qml_categoria_resto_nula():
+    """Categoria A + la categoria NULL que QGIS usa como "todos los demas
+    valores" (QgsRendererCategory con valor nulo). B no tiene categoria: en
+    QGIS cae en la NULL, asi que tiene que dibujarse tambien en ArcMap."""
+    capa = _vectorial("poligonos.shp", "Resto nulo")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _relleno("#e41a1c", 0.26), "Tipo A"),
+        QgsRendererCategory(None, _relleno("#999999", 0.26),
+                            "Todos los demas valores")]))
+    _guardar_qml(capa, "categoria_resto_nula.qml")
+
+
+def _categorizado_nulos(expresion, categorias, nombre_fichero):
+    capa = QgsVectorLayer(os.path.join(DIR_DATOS, "nulos.gdb")
+                          + "|layername=cuadros", "Nulos", "ogr")
+    if not capa.isValid():
+        sys.exit("nulos.gdb no valida (corre antes run_regresion_qml.py)")
+    capa.setRenderer(QgsCategorizedSymbolRenderer(expresion, [
+        QgsRendererCategory(valor, _relleno(color, 0.26), etiqueta)
+        for valor, color, etiqueta in categorias]))
+    _guardar_qml(capa, nombre_fichero)
+
+
+def qml_categorizado_multicampo():
+    """concat(coalesce(G,''), ', ', coalesce(R,'')): QGIS convierte los nulos
+    en '' dentro del valor. Categorias con un componente vacio."""
+    _categorizado_nulos(
+        "concat(coalesce(\"G\",''), ', ', coalesce(\"R\",''))",
+        [("1, Forestal MUP", "#e41a1c", "1, Forestal MUP"),
+         ("1, ", "#4daf4a", "Grupo 1 sin red"),
+         (", Rural", "#377eb8", "Rural sin grupo"),
+         (None, "#999999", "Todos los demas valores")],
+        "categorizado_multicampo.qml")
+
+
+def qml_categorizado_multicampo_barras():
+    """"G" || ', ' || "R" sin coalesce: un nulo anula el valor entero y la
+    entidad cae en "todos los demas"."""
+    _categorizado_nulos(
+        "\"G\" || ', ' || \"R\"",
+        [("1, Forestal MUP", "#e41a1c", "1, Forestal MUP"),
+         ("1, ", "#4daf4a", "Grupo 1 sin red"),
+         (None, "#999999", "Todos los demas valores")],
+        "categorizado_multicampo_barras.qml")
+
+
+def qml_raster_cortes():
+    """Pseudocolor DISCRETO (clases) sobre un raster flotante, y el .aux.xml
+    que GDAL deja al pedir estadisticas aproximadas (sin histograma): la
+    combinacion que tumbaba la emision con la pendiente de Majal Blanco."""
+    import shutil
+    from osgeo import gdal
+    from qgis.core import (QgsColorRampShader, QgsRasterShader,
+                           QgsSingleBandPseudoColorRenderer)
+    ruta = os.path.join(DIR_DATOS, "cortes.tif")
+    aux = ruta + ".aux.xml"
+    if os.path.exists(aux):
+        os.remove(aux)
+    capa = QgsRasterLayer(ruta, "Cortes")
+    if not capa.isValid():
+        sys.exit("cortes.tif no valido (corre antes run_regresion_qml.py)")
+    rampa = QgsColorRampShader(0, 45, None, QgsColorRampShader.Discrete)
+    rampa.setColorRampItemList([
+        QgsColorRampShader.ColorRampItem(10, QColor("#38a800"), "llano"),
+        QgsColorRampShader.ColorRampItem(30, QColor("#ffff00"), "medio"),
+        QgsColorRampShader.ColorRampItem(float("inf"), QColor("#e60000"),
+                                         "fuerte")])
+    sombreado = QgsRasterShader()
+    sombreado.setRasterShaderFunction(rampa)
+    capa.setRenderer(QgsSingleBandPseudoColorRenderer(
+        capa.dataProvider(), 1, sombreado))
+    _guardar_qml(capa, "raster_cortes.qml")
+    del capa
+    # El sidecar lo escribe GDAL, no la mano: estadisticas aproximadas, que es
+    # lo que deja QGIS (STATISTICS_APPROXIMATE=YES, sin histograma).
+    ds = gdal.Open(ruta)
+    ds.GetRasterBand(1).ComputeStatistics(True)
+    ds = None
+    destino = os.path.join(DIR_FIX, "aux_gdal")
+    if not os.path.isdir(destino):
+        os.makedirs(destino)
+    shutil.move(aux, os.path.join(destino, "cortes.tif.aux.xml"))
+    print("escrito", os.path.join(destino, "cortes.tif.aux.xml"))
+
+
+def _etiquetar(capa, campo, es_expresion, tamano, unidad, color, negrita=False,
+               cursiva=False, halo=None, escalas=None):
+    from qgis.core import (Qgis, QgsPalLayerSettings, QgsTextBufferSettings,
+                           QgsTextFormat, QgsVectorLayerSimpleLabeling)
+    from qgis.PyQt.QtGui import QFont
+    ajustes = QgsPalLayerSettings()
+    ajustes.fieldName = campo
+    ajustes.isExpression = es_expresion
+    formato = QgsTextFormat()
+    fuente = QFont("Arial")
+    fuente.setBold(negrita)
+    fuente.setItalic(cursiva)
+    formato.setFont(fuente)
+    formato.setSize(tamano)
+    formato.setSizeUnit(unidad)
+    formato.setColor(QColor(color))
+    if halo:
+        buffer = QgsTextBufferSettings()
+        buffer.setEnabled(True)
+        buffer.setSize(halo[0])
+        buffer.setSizeUnit(Qgis.RenderUnit.Millimeters)
+        buffer.setColor(QColor(halo[1]))
+        formato.setBuffer(buffer)
+    ajustes.setFormat(formato)
+    if escalas:
+        # API: minimumScale = limite ALEJADO. En el XML sale como scaleMax.
+        ajustes.scaleVisibility = True
+        ajustes.minimumScale, ajustes.maximumScale = escalas
+    capa.setLabeling(QgsVectorLayerSimpleLabeling(ajustes))
+    capa.setLabelsEnabled(True)
+
+
+def qml_etiquetas_simples():
+    """Campo, Arial negrita y cursiva de 10 pt, color, halo de 1 mm y escalas."""
+    from qgis.core import Qgis
+    capa = _vectorial("poligonos.shp", "Etiquetas simples")
+    _etiquetar(capa, "TIPO", False, 10, Qgis.RenderUnit.Points, "#123456",
+               negrita=True, cursiva=True, halo=(1, "#ffff00"),
+               escalas=(50000, 1000))
+    _guardar_qml(capa, "etiquetas_simples.qml")
+
+
+def qml_etiquetas_expresion():
+    """Concatenacion con || y tamano en mm (sin halo)."""
+    from qgis.core import Qgis
+    capa = QgsVectorLayer(os.path.join(DIR_DATOS, "nulos.gdb")
+                          + "|layername=cuadros", "Etiquetas expresion", "ogr")
+    if not capa.isValid():
+        sys.exit("nulos.gdb no valida (corre antes run_regresion_qml.py)")
+    _etiquetar(capa, "\"G\" || ' - ' || \"R\"", True, 3,
+               Qgis.RenderUnit.Millimeters, "#e41a1c")
+    _guardar_qml(capa, "etiquetas_expresion.qml")
+
+
+def qml_etiquetas_no_traducible():
+    """Expresion que ArcMap no sabe evaluar: la capa sale, sin etiquetas."""
+    from qgis.core import Qgis
+    capa = _vectorial("poligonos.shp", "Etiquetas upper")
+    _etiquetar(capa, "upper(\"TIPO\")", True, 10, Qgis.RenderUnit.Points,
+               "#000000")
+    _guardar_qml(capa, "etiquetas_no_traducible.qml")
+
+
+def _rgb(nombre_fichero, bandas, realces, raster="rgb.tif"):
+    """RGB sobre rgb.tif (8 bits) o rgb16.tif (16 bits). `realces`: por
+    banda, None (sin realce) o (algoritmo, minimo, maximo)."""
+    from qgis.core import QgsContrastEnhancement, QgsMultiBandColorRenderer
+    capa = QgsRasterLayer(os.path.join(DIR_DATOS, raster), "RGB")
+    if not capa.isValid():
+        sys.exit("%s no valido (corre antes run_regresion_qml.py)" % raster)
+    render = QgsMultiBandColorRenderer(capa.dataProvider(), *bandas)
+    fijar = (render.setRedContrastEnhancement,
+             render.setGreenContrastEnhancement,
+             render.setBlueContrastEnhancement)
+    for fija, banda, realce in zip(fijar, bandas, realces):
+        if realce is None:
+            continue
+        algoritmo, minimo, maximo = realce
+        ce = QgsContrastEnhancement(capa.dataProvider().dataType(banda))
+        ce.setContrastEnhancementAlgorithm(getattr(
+            QgsContrastEnhancement, algoritmo))
+        ce.setMinimumValue(minimo)
+        ce.setMaximumValue(maximo)
+        fija(ce)
+    capa.setRenderer(render)
+    _guardar_qml(capa, nombre_fichero)
+
+
+def qml_raster_rgb():
+    _rgb("raster_rgb_sin_realce.qml", (1, 2, 3), (None, None, None))
+    # Bandas cambiadas (3-2-1) y estirado con minimo/maximo propios por banda.
+    _rgb("raster_rgb_estirado.qml", (3, 2, 1), (
+        ("StretchToMinimumMaximum", 0, 200),
+        ("StretchToMinimumMaximum", 10, 220),
+        ("StretchToMinimumMaximum", 20, 240)))
+    # Sin realce en una banda y estirado en las otras: no se traduce.
+    _rgb("raster_rgb_mixto.qml", (1, 2, 3), (
+        None, ("StretchToMinimumMaximum", 10, 220),
+        ("StretchToMinimumMaximum", 20, 240)))
+    # 16 bits: estirado interior (ArcMap lo reproduce compensando su 5%) y
+    # sin realce (el tramo 0-255 no se puede empezar en 0: se avisa).
+    _rgb("raster_rgb16_estirado.qml", (1, 2, 3), (
+        ("StretchToMinimumMaximum", 30, 200),
+        ("StretchToMinimumMaximum", 40, 210),
+        ("StretchToMinimumMaximum", 50, 220)), raster="rgb16.tif")
+    _rgb("raster_rgb16_sin_realce.qml", (1, 2, 3), (None, None, None),
+         raster="rgb16.tif")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -295,6 +489,169 @@ def qgz_batch_sintetico():
     print("escrito", salida)
 
 
+#: Unidad que el fixture de --remap tiene escrita y que NO debe existir al
+#: correr la regresion (el caso de uso: un proyecto con rutas `Z:` convertido
+#: donde esa unidad no esta montada). La regresion la importa de aqui.
+UNIDAD_REMAP = "Q:"
+
+
+def qgz_batch_remap():
+    """Proyecto con rutas ABSOLUTAS a una unidad que luego no existe.
+
+    Para que las rutas las escriba QGIS y no una sustitucion de texto, la
+    unidad se crea de verdad con `subst` sobre los datos sinteticos mientras
+    QGIS carga las capas y guarda, y se quita al terminar."""
+    import subprocess
+    if os.path.exists(UNIDAD_REMAP + "\\"):
+        sys.exit("la unidad %s ya existe: el fixture necesita una libre"
+                 % UNIDAD_REMAP)
+    subprocess.check_call(["subst", UNIDAD_REMAP, DIR_DATOS])
+    try:
+        proyecto = QgsProject.instance()
+        proyecto.clear()
+        zonas = QgsVectorLayer(UNIDAD_REMAP + "/poligonos.shp",
+                               "Zonas remap", "ogr")
+        cats = [QgsRendererCategory(v, QgsFillSymbol.createSimple(
+            {"color": c, "outline_color": "#000000"}), "Tipo %s" % v)
+            for v, c in (("A", "#e41a1c"), ("B", "#377eb8"))]
+        zonas.setRenderer(QgsCategorizedSymbolRenderer("TIPO", cats))
+        paleta = QgsRasterLayer(UNIDAD_REMAP + "/paleta.tif", "Paleta remap")
+        clases = [QgsPalettedRasterRenderer.Class(v, QColor(c), et)
+                  for v, c, et in ((0, "#ffffcc", "cero"), (1, "#41b6c4", "uno"),
+                                   (2, "#253494", "dos"))]
+        if paleta.isValid():
+            paleta.setRenderer(QgsPalettedRasterRenderer(
+                paleta.dataProvider(), 1, clases))
+        gpkg = QgsVectorLayer(UNIDAD_REMAP + "/zonas.gpkg|layername=zonas",
+                              "GPKG remap", "ogr")
+        for capa in (zonas, paleta, gpkg):
+            if not capa.isValid():
+                sys.exit("capa no valida en %s: %s (corre antes "
+                         "run_regresion_qml.py)" % (UNIDAD_REMAP, capa.name()))
+            proyecto.addMapLayer(capa)
+        proyecto.writeEntryBool("Paths", "/Absolute", True)
+        metadatos = proyecto.metadata()
+        metadatos.setAuthor("qml2lyr tests")
+        proyecto.setMetadata(metadatos)
+        salida = os.path.join(DIR_FIX, "batch_remap.qgz")
+        if not proyecto.write(salida):
+            sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+        proyecto.clear()
+        print("escrito", salida)
+    finally:
+        subprocess.call(["subst", UNIDAD_REMAP, "/D"])
+
+
+def qgz_batch_wms():
+    """Capas WMS contra el servidor local de `wms_local.py` (sin red externa):
+    QGIS se conecta de verdad y escribe el datasource tal como lo guarda."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    servidor = wms_local.arrancar()
+    try:
+        proyecto = QgsProject.instance()
+        proyecto.clear()
+        casos = (("WMS dos hojas", ["parcelas", "textos"], 0.7),
+                 ("WMS grupo", ["catastro"], 1.0),
+                 ("WMS con una que falta", ["masas", "no_existe"], 1.0))
+        for nombre, capas, opacidad in casos:
+            uri = "crs=EPSG:25830&format=image/png&%s&%s&url=%s" % (
+                "&".join("layers=" + c for c in capas),
+                "&".join("styles" for _ in capas), wms_local.URL)
+            capa = QgsRasterLayer(uri, nombre, "wms")
+            if not capa.isValid():
+                sys.exit("capa WMS no valida: %s" % capa.error().summary())
+            capa.renderer().setOpacity(opacidad)
+            proyecto.addMapLayer(capa)
+        # WMTS pidiendo la matriz EPSG:25830, que NO es la primera del
+        # servicio (ArcObjects se queda con la primera si no se fija).
+        wmts = QgsRasterLayer(
+            "crs=EPSG:25830&format=image/png&layers=mapa&styles=default&"
+            "tileMatrixSet=EPSG:25830&url=" + wms_local.URL_WMTS,
+            "WMTS mapa", "wms")
+        if not wmts.isValid():
+            sys.exit("capa WMTS no valida: %s" % wmts.error().summary())
+        proyecto.addMapLayer(wmts)
+        metadatos = proyecto.metadata()
+        metadatos.setAuthor("qml2lyr tests")
+        proyecto.setMetadata(metadatos)
+        salida = os.path.join(DIR_FIX, "batch_wms.qgz")
+        if not proyecto.write(salida):
+            sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+        proyecto.clear()
+        print("escrito", salida)
+    finally:
+        servidor.shutdown()
+
+
+def qgz_proyecto_mxd():
+    """Proyecto para el modo --mxd: grupos anidados, capas apagadas, una capa
+    que no convierte (flecha), un grupo que se queda vacio y un raster RGB.
+
+        x Zonas por tipo
+        x Grupo A
+            - Solo rios
+            - Sub B
+                x Paleta
+        x Hitos flecha          <- no convierte: se omite
+        x Solo fallos           <- su unica capa no convierte: grupo omitido
+            x Hitos flecha 2
+        - RGB                   <- raster RGB: entra con el render por defecto
+    """
+    from qgis.core import QgsCoordinateReferenceSystem, QgsReferencedRectangle
+    from qgis.core import QgsRectangle
+    proyecto = QgsProject.instance()
+    proyecto.clear()
+    proyecto.setCrs(QgsCoordinateReferenceSystem("EPSG:25830"))
+    proyecto.setTitle("Proyecto de prueba del modo MXD")
+
+    zonas = _vectorial("poligonos.shp", "Zonas por tipo")
+    zonas.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _relleno("#e41a1c", 0.26), "Tipo A"),
+        QgsRendererCategory("B", _relleno("#377eb8", 0.26), "Tipo B")]))
+    rios = _vectorial("lineas.shp", "Solo rios", subset="\"TIPO\" = 'rio'")
+    rios.renderer().setSymbol(_linea("#0000ff"))
+    paleta = QgsRasterLayer(os.path.join(DIR_DATOS, "paleta.tif"), "Paleta")
+    paleta.setRenderer(QgsPalettedRasterRenderer(paleta.dataProvider(), 1, [
+        QgsPalettedRasterRenderer.Class(v, QColor(c), et) for v, c, et in
+        ((0, "#ffffcc", "cero"), (1, "#41b6c4", "uno"), (2, "#253494", "dos"))]))
+    flechas = []
+    for nombre in ("Hitos flecha", "Hitos flecha 2"):
+        hitos = _vectorial("puntos.shp", nombre)
+        hitos.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+            {"name": "arrow", "color": "#ff7f00", "size": "3"}))
+        flechas.append(hitos)
+    rgb = QgsRasterLayer(os.path.join(DIR_DATOS, "rgb.tif"), "RGB")
+    for capa in [zonas, rios, paleta, rgb] + flechas:
+        if not capa.isValid():
+            sys.exit("capa no valida: %s (corre antes run_regresion_qml.py)"
+                     % capa.name())
+        proyecto.addMapLayer(capa, False)
+
+    raiz = proyecto.layerTreeRoot()
+    raiz.addLayer(zonas)
+    grupo_a = raiz.addGroup("Grupo A")
+    grupo_a.addLayer(rios).setItemVisibilityChecked(False)
+    sub_b = grupo_a.addGroup("Sub B")
+    sub_b.setItemVisibilityChecked(False)
+    sub_b.addLayer(paleta)
+    raiz.addLayer(flechas[0])
+    raiz.addGroup("Solo fallos").addLayer(flechas[1])
+    raiz.addLayer(rgb).setItemVisibilityChecked(False)
+
+    proyecto.viewSettings().setDefaultViewExtent(QgsReferencedRectangle(
+        QgsRectangle(599900, 4199900, 600500, 4200300), proyecto.crs()))
+    proyecto.writeEntryBool("Paths", "/Absolute", False)
+    metadatos = proyecto.metadata()
+    metadatos.setAuthor("qml2lyr tests")
+    proyecto.setMetadata(metadatos)
+    salida = os.path.join(DIR_FIX, "proyecto_mxd.qgz")
+    if not proyecto.write(salida):
+        sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+    proyecto.clear()
+    print("escrito", salida)
+
+
 # Nombre del fichero (sin extension) -> generador.
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
@@ -308,7 +665,18 @@ GENERADORES = {
     "puntos_hexagono_equilatero": qml_hexagono_equilatero,
     "categoria_oculta_no_soportada": qml_categoria_oculta_no_soportada,
     "reglas_avisos_por_regla": qml_reglas_avisos_por_regla,
+    "categoria_resto_nula": qml_categoria_resto_nula,
+    "categorizado_multicampo": qml_categorizado_multicampo,
+    "categorizado_multicampo_barras": qml_categorizado_multicampo_barras,
+    "raster_cortes": qml_raster_cortes,
+    "raster_rgb": qml_raster_rgb,
+    "etiquetas_simples": qml_etiquetas_simples,
+    "etiquetas_expresion": qml_etiquetas_expresion,
+    "etiquetas_no_traducible": qml_etiquetas_no_traducible,
     "batch_sintetico": qgz_batch_sintetico,
+    "batch_remap": qgz_batch_remap,
+    "batch_wms": qgz_batch_wms,
+    "proyecto_mxd": qgz_proyecto_mxd,
 }
 
 

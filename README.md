@@ -35,16 +35,18 @@ estilo por defecto.
 
 | | |
 |---|---|
-| **Renderers** | símbolo único, categorizado, graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
+| **Renderers** | símbolo único, categorizado (también por la concatenación de 2 o 3 campos), graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
 | **Relleno** | sólido, hueco, tramado (6 patrones), multicapa, relleno con imagen |
 | **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot` |
 | **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
 | **Capa** | definition query, opacidad, visibilidad por escala |
-| **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado) |
+| **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
+| **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
+| **Servicios** (`--batch`) | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
 
-Lo que **no** convierte (etiquetas, expresiones, propiedades definidas por datos,
-ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitaciones.md).
+Lo que **no** convierte (etiquetado por reglas, expresiones, propiedades
+definidas por datos, ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitaciones.md).
 
 ## Requisitos
 
@@ -69,10 +71,31 @@ El motor también se usa sin QGIS, desde la línea de comandos:
 ```
 C:\Python27\ArcGIS10.5\python.exe src\emisor.py <estilo.qml> <dato> <salida.lyr> [--defquery "..."]
 C:\Python27\ArcGIS10.5\python.exe src\emisor.py --batch <proyecto.qgz> <carpeta_salida>
+C:\Python27\ArcGIS10.5\python.exe src\emisor.py --mxd <proyecto.qgz> <salida.mxd> [--plantilla <x.mxd>]
 ```
+
+El modo `--mxd` monta el proyecto entero en un `.mxd`: las mismas capas, en el
+mismo orden, con los mismos grupos y la misma visibilidad que el panel de capas
+de QGIS, con el SRC y la extensión del proyecto y rutas relativas. Parte de la
+plantilla ISO A3 horizontal de ArcGIS (o de la que se le pase), deja los `.lyr`
+de cada capa en `<salida>_lyr/` y **no sobrescribe** un `.mxd` que ya exista.
+Lo que no sabe convertir lo omite y lo lista con su motivo, y al terminar
+**reabre** el `.mxd` para comprobar que tiene lo que se puso.
 
 El modo `--batch` convierte todas las capas de un proyecto. Una capa que falla
 se informa y se salta; el lote sigue.
+
+Si el proyecto apunta a una unidad que en esta máquina se llama de otra forma
+(vale en `--batch` y en `--mxd`)
+(`Z:` es `L:\Mi unidad\Carto`), `--remap` lee el dato donde está y deja el
+`.lyr` apuntando a la ruta del proyecto. Es repetible:
+
+```
+... --batch proyecto.qgz salida --remap "Z:=L:\Mi unidad\Carto"
+```
+
+Si la unidad original no existe aquí, el `.lyr` sale igual y la capa lleva un
+aviso: ArcMap la verá rota hasta abrirla donde esa unidad exista.
 
 ## Tests
 

@@ -10,7 +10,7 @@ El plugin SIEMPRE delega en el emisor como subproceso (ADR-001, abajo).
 
 No-gos: dirección inversa ArcMap→QGIS (la hace SLYR community gratis),
 rule-based por expresión arbitraria, ArcGIS Pro `.lyrx` (fase futura),
-expresiones / geometry-generators / data-defined, etiquetas.
+expresiones / geometry-generators / data-defined, etiquetado por reglas.
 
 ## Flujo de ramas (GitHub Flow)
 
@@ -96,8 +96,30 @@ contaminan). Tres modos:
   <salida.lyr> [--nombre N] [--defquery Q]` — el plugin genera el `.qml` de la
   capa viva con `saveNamedStyle`. `parse_qml` soporta vectorial y ráster. Un
   `.qml` rule-based da N `.lyr` (sufijo `_<etiqueta>`).
-- Batch: `emisor.py --batch <proyecto.qgz> <dir_salida>` — resuelve el datasource
-  de cada capa (relativo al `.qgz` o absoluto/red) y emite un `.lyr` por capa.
+- Batch: `emisor.py --batch <proyecto.qgz> <dir_salida> [--remap ORIGEN=DESTINO]...`
+  — resuelve el datasource de cada capa (relativo al `.qgz` o absoluto/red) y
+  emite un `.lyr` por capa. `--remap` (solo batch, repetible, primera regla que
+  casa, prefijo con frontera de separador) **lee** el dato en DESTINO y el `.lyr`
+  se reapunta a ORIGEN sin validar (`findAndReplaceWorkspacePath(..., False)`),
+  releyendo después el `dataSource`. Si el reapuntado falla, la capa sale
+  `ok=False`, `tipo_error: ReapunteFallido`. La clave `dato` del JSON es la ruta
+  final del `.lyr`; si su unidad no existe en la máquina, va un aviso.
+- **MXD**: `emisor.py --mxd <proyecto.qgz> <salida.mxd> [--plantilla X.mxd]
+  [--remap ...]` → `emitir_mxd`. Corre el batch a `<salida>_lyr/` (cada
+  resultado lleva `id`, el id de la capa en QGIS, que lo casa con el árbol
+  `layer-tree-group`) y monta el árbol con arcpy: grupos desde un `.lyr` de
+  `GroupLayer` vacío, `AddLayer`/`AddLayerToGroup` en `BOTTOM`, visibilidad de
+  `checked`, SRC de `projectCrs` y extensión de `<mapcanvas>` (o de
+  `ProjectViewSettings/DefaultViewExtent`). Lo que no convierte va a
+  `omitidas` con su motivo; un grupo que se queda vacío, también; un ráster
+  `multibandcolor` cuyo estilo no se pudo traducir entra con `MakeRasterLayer`
+  (render por defecto) y aviso. `relativePaths` +
+  `saveACopy`, y **verifica reabriendo**: capas y grupos (sin bajar dentro de
+  un servicio), rutas relativas y fuentes rotas; una rota que apunta a un
+  origen de `--remap` o a una unidad inexistente es esperada, cualquier otra da
+  `ok=False`, `tipo_error: VerificacionFallida`, exit 2. Si el `.mxd` existe:
+  `SalidaExiste`. **`mxd.title` de arcpy no se guarda** (ni con `saveACopy` ni
+  con `save`): el título del proyecto no se traslada.
 - JSON por capa: `ok`/`nombre`/`salida`/`avisos` o `error`/`tipo_error`, más una
   lista `avisos` de nivel superior para lo que no es de ninguna capa (p.ej. un
   temporal que no se pudo borrar). Una capa que falla se reporta `ok=False` y NO
@@ -116,8 +138,15 @@ cualquiera de las dos falte.
 Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / multicapa / línea
 (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) / marcador (5 formas simples
 + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por escala.
-Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado).
+Categorizado por concatenación de 2-3 campos (`concat`/`||`, con o sin
+`coalesce(campo,'')`) → valores únicos multicampo con `FieldDelimiter`; los
+nulos que QGIS convierte en `''` se emiten además como `<Null>` y `' '`,
+agrupados con `AddReferenceValue` (`parser_qgis._expresion_multicampo`).
+Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado),
+**RGB** (`multibandcolor`: bandas, alfa, sin realce o estirado mín-máx por banda).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
+Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr` con
+`WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza.
 
 ## Gotchas críticos (no redescubrir)
 
@@ -141,10 +170,17 @@ RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
   QGIS no dibuja tumbaba la capa entera. Lo mismo en categorizado y graduado: los
   símbolos de las clases con `render="false"` tampoco se parsean
   (`_simbolos_visibles`).
-- **Categoría de NULOS: el valor que casa en ArcMap es `<Null>`** (verificado
-  por render sobre una file geodatabase con un campo nulo). QGIS serializa la
-  categoría nula como `type="NULL" value="NULL"`: emitirla tal cual mandaba a
-  ArcMap a casar el *texto* "NULL". Se traduce y se avisa.
+- **La categoría `type="NULL"` de QGIS es «todos los demás valores», no «solo
+  los nulos»** (medido con `symbolForFeature` en QGIS 3.44.12, 2026-09-25: recoge
+  los nulos **y** todo valor sin categoría). Va al **símbolo por defecto** de
+  ArcMap, que también recoge los nulos (medido con `SymbolByFeature`). Hasta el
+  2026-09-25 se emitía como clase `<Null>` y los valores sin categoría **no se
+  dibujaban** en ArcMap.
+- **Cómo compone ArcMap el valor de un nulo** (medido con `SymbolByFeature`): en
+  una geodatabase, `<Null>` (y en varios campos, `1, <Null>`). En un **shapefile**
+  arcpy lee el texto vacío como `' '` (un espacio) y el numérico vacío como `0`;
+  QGIS lee los dos como NULL. `SymbolByFeature` no casa nada sin
+  `PrepareFilter` antes: la regresión lo usa en `_color_por_entidad`.
 - **Trazo discontinuo con ancho ≥ 2 pt: ArcMap lo dibuja CONTINUO** (medido por
   render). El patrón de `esriSimpleLineStyle` está en unidades de dispositivo y
   lo tapa el grosor de la pluma. Se emite el estilo pedido y **se avisa**.
@@ -223,14 +259,60 @@ RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
   quedan para QA visual.
 - **Cortes ráster**: `IRasterClassifyColorRampRenderer` **no tiene `MinimumBreak`**.
   Tiene `ClassCount+1` cortes y **`Break[0]` es el mínimo**: el techo de la clase
-  `i` es `Break[i+1]`. Antes de emitir hace falta `CalculateStatistics_management`
-  y un `Update()`, o el min/max no existen.
+  `i` es `Break[i+1]`. **Todos los cortes (con `Break[0]` = mínimo de
+  `GetRasterProperties`) van ANTES del primer `Update()`**: con los cortes sin
+  fijar, `Update()` clasifica por su cuenta y necesita el **histograma**, que un
+  `.aux.xml` escrito por GDAL/QGIS no trae (min/max sí) → «Error no
+  especificado». Era la pendiente de 2 GB de Majal Blanco: ni el tamaño ni Drive
+  (medido 2026-09-25; mismo render con y sin histograma). Etiquetas y símbolos,
+  **después** del `Update()`: escribir un `Break` regenera la etiqueta.
+- **Errores de ArcObjects con nombre de paso**: `emisor._paso(...)` envuelve
+  estadísticas, apertura del ráster y renderer, y el error dice
+  `fallo en <paso>: COMError: ...`.
 - **Ráster, opacidad**: no está en `<layerOpacity>` sino en el atributo `opacity`
   del `<rasterrenderer>`.
 - **Ráster, valores ocultos**: `<rasterTransparency>` cuelga DENTRO de
   `<rasterrenderer>` y oculta valores sueltos al margen de la paleta. ArcMap no
   tiene transparencia por clase: el 100% se reproduce con símbolo nulo y lo demás
   se avisa.
+- **WMS**: el `WMSMapLayer` conectado trae **todas las subcapas apagadas**. Los
+  grupos del árbol de capas **no exponen su nombre WMS**; se resuelve sobre las
+  descripciones del servicio (`IWMSGroupLayer.WMSServiceDescription` →
+  `LayerDescription[i]`), que sí lo tienen. `IWMSMapLayer.WMSServiceDescription`
+  **no se deja leer desde comtypes** (AttributeError): usar la de
+  `IWMSGroupLayer`. La URL guardada se lee de `IDataLayer.DataSourceName` →
+  `IWMSConnectionName.ConnectionProperties`. Abrir un `.lyr` WMS **reconecta**:
+  el test mantiene vivo el WMS local (`tests/wms_local.py`) mientras vuelca.
+- **WMTS**: `WMTSLayer` está en esriCarto y `WMTSConnectionName` en
+  esriGISClient. Al conectar se queda con la **primera matriz de teselas** del
+  servicio (EPSG:4326 en el IGN) aunque el PropertySet lleve `TILEMATRIXSET`:
+  `TileMatrixSet`, `Style` e `ImageFormat` se fijan en la capa **después** de
+  `Connect` y se leen de vuelta. El WMTS local de los tests pone la 4326 primero
+  para cazarlo.
+- **Etiquetas**: `LabelEngineLayerProperties` **estándar**, nunca las de Maplex:
+  medido (2026-09-25, render) que un `.lyr` estándar se pinta igual en un mapa
+  estándar y en uno Maplex, y uno Maplex **no** se pinta en uno estándar. El
+  fallo de Maplex de [arcmap-mcp] es otro: modificar capas **dentro** de un MXD
+  Maplex. Para saber si un MXD de prueba es Maplex **no** fiarse de leer
+  `IMap.AnnotationEngine` en standalone (arcmap-mcp lo vio mentir): el
+  discriminador es que un `.lyr` con propiedades Maplex pinta 0 píxeles en un
+  mapa estándar y >0 en uno Maplex. Así se verificó, sobre un MXD con Maplex
+  activado a mano en la interfaz. Poner Maplex por script no persiste. En el XML de QGIS `<text-buffer>` cuelga **dentro** de
+  `<text-style>`, y las escalas van **al revés** que en la API: `scaleMax` es el
+  `minimumScale` (límite alejado) → `AnnotationMinimumScale`. La fuente, con
+  `CreateObject("StdFont")`.
+- **RGB (`RasterRGBRenderer`), medido por render el 2026-09-25**: no expone
+  `IRasterStretchMinMax`; el mín/máx por banda va como estadísticas propias
+  (`StretchStatsType = GlobalStats` + `IArray` de **`StatsHistogram`**, no
+  `RasterStatistics`, que revienta `Update()`). El `IArray` se crea por ProgID
+  (`esriSystem.Array`: `esriSystem.Array` choca con el `Array` de ctypes).
+  **Depende del tipo de dato**: en **8 bits**, `NONE` es la identidad (= QGIS
+  sin realce) y `MinimumMaximum` estira exactamente entre las estadísticas; en
+  **16 bits**, `NONE` reparte el color sobre 0-65535 (un 0-255 sale negro) y
+  `MinimumMaximum` pinta entre mín + 5 % y máx − 5 % con el mín recortado a 0:
+  se compensa ensanchando el rango, y si el mínimo compensado baja de 0 se avisa.
+  La media y la desviación típica no influyen. Los datos de prueba de 8 bits
+  se fuerzan con `CopyRaster`: `CompositeBands` saca 16 bits.
 - **Estadísticas del ráster**: `CalculateStatistics` reescribe los sidecars
   `.aux.xml` en cada pasada (resync inútil en una carpeta sincronizada). Se
   calcula solo si `GetRasterProperties` falla.

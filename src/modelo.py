@@ -143,10 +143,13 @@ class RendererSimple(object):
 class ClaseValor(object):
     """Una categoria de un renderer de valores unicos."""
 
-    def __init__(self, valor, label, simbolo):
+    def __init__(self, valor, label, simbolo, variantes=None):
         self.valor = valor
         self.label = label
         self.simbolo = simbolo
+        # Otros valores que ArcMap debe agrupar bajo esta clase (una sola
+        # entrada de leyenda): los nulos de un valor compuesto de varios campos.
+        self.variantes = variantes or []
 
 
 class RendererValoresUnicos(object):
@@ -156,11 +159,14 @@ class RendererValoresUnicos(object):
     se traduce al simbolo por defecto del renderer de ArcMap.
     """
 
-    def __init__(self, campos, clases, default_simbolo=None, default_label=u""):
+    def __init__(self, campos, clases, default_simbolo=None, default_label=u"",
+                 separador=None):
         self.campos = campos
         self.clases = clases
         self.default_simbolo = default_simbolo
         self.default_label = default_label
+        # FieldDelimiter de ArcMap cuando hay varios campos.
+        self.separador = separador
 
 
 class ClaseRango(object):
@@ -257,6 +263,20 @@ class RendererRasterEstirado(object):
         self.paradas = paradas  # ParadaColor, ascendentes por valor
 
 
+class RendererRasterRGB(object):
+    """multibandcolor de QGIS -> RasterRGBRenderer.
+
+    `bandas`: (roja, verde, azul) numeradas desde 1 como en QGIS; None = sin
+    esa banda. `alfa`: banda alfa o None. `estirado`: None (valores tal cual,
+    NoEnhancement) o una lista de (minimo, maximo) por banda (estirado lineal
+    entre esos valores, StretchToMinimumMaximum)."""
+
+    def __init__(self, bandas, alfa=None, estirado=None):
+        self.bandas = bandas
+        self.alfa = alfa
+        self.estirado = estirado
+
+
 class CapaEstilo(object):
     """Estilo completo de una capa: lo que el emisor convierte en un .lyr."""
 
@@ -276,6 +296,54 @@ class CapaEstilo(object):
         # avisos: degradaciones conscientes (p.ej. symbol-layers descartados).
         # Nunca silenciosas: el llamador las imprime o las devuelve en su JSON.
         self.avisos = avisos if avisos is not None else []
+        # Capa de servicio (WMS): ServicioWMS. Sin dato de fichero ni renderer.
+        self.servicio = None
+        # Etiquetas: Etiquetado o None.
+        self.etiquetado = None
+
+
+class Etiquetado(object):
+    """Etiquetado simple de QGIS -> LabelEngineLayerProperties de ArcMap
+    (motor ESTANDAR: medido el 2026-09-25 que un .lyr asi se pinta igual en un
+    mapa estandar y en uno Maplex; uno con propiedades Maplex no se pinta en
+    uno estandar). Medidas en puntos, escalas como denominadores (0 = sin
+    limite, escala_min = limite alejado)."""
+
+    def __init__(self, expresion, fuente, tamano_pt, color, negrita=False,
+                 cursiva=False, halo=None, escala_min=0.0, escala_max=0.0):
+        self.expresion = expresion    # expresion VBScript de ArcMap: [A] & " " & [B]
+        self.fuente = fuente
+        self.tamano_pt = tamano_pt
+        self.color = color            # (r, g, b)
+        self.negrita = negrita
+        self.cursiva = cursiva
+        self.halo = halo              # (tamano_pt, (r, g, b)) o None
+        self.escala_min = escala_min
+        self.escala_max = escala_max
+
+
+class ServicioWMS(object):
+    """Capa WMS de QGIS -> WMSMapLayer de ArcMap. No tiene renderer: el estilo
+    lo pone el servidor. Va en `CapaEstilo.servicio` y `renderer` queda None."""
+
+    def __init__(self, url, capas, estilos=None, formato=None, crs=None):
+        self.url = url
+        self.capas = capas          # nombres WMS de `layers=`, en su orden
+        self.estilos = estilos or []
+        self.formato = formato
+        self.crs = crs
+
+
+class ServicioWMTS(object):
+    """Capa WMTS de QGIS -> WMTSLayer de ArcMap. Como ServicioWMS: va en
+    `CapaEstilo.servicio` y no tiene renderer."""
+
+    def __init__(self, url, capa, matriz, estilo=None, formato=None):
+        self.url = url
+        self.capa = capa            # identificador de la capa (`layers=`)
+        self.matriz = matriz        # TileMatrixSet (`tileMatrixSet=`)
+        self.estilo = estilo
+        self.formato = formato
 
 
 class SimbologiaNoSoportada(Exception):

@@ -28,8 +28,15 @@ from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     ClaseValor, RendererValoresUnicos, ClaseRango,
                     RendererGraduado, RendererRasterValoresUnicos,
                     ClaseCorteRaster, RendererRasterCortes,
-                    ParadaColor, RendererRasterEstirado, CapaEstilo,
+                    ParadaColor, RendererRasterEstirado,
+                    RendererRasterRGB, CapaEstilo,
+                    ServicioWMS, ServicioWMTS, Etiquetado,
                     SimbologiaNoSoportada)
+
+try:
+    from urllib import unquote as _unquote  # py2.7 (el motor)
+except ImportError:
+    from urllib.parse import unquote as _unquote  # py3
 
 _MM2PT = 2.834645669  # 1 mm = 2.834... puntos
 
@@ -75,9 +82,11 @@ _ANCHO_PT_TRAZO_CONTINUO = 2.0
 _TRAMAS_RELLENO = ("horizontal", "vertical", "cross", "b_diagonal",
                    "f_diagonal", "diagonal_x")
 
-# Valor que IUniqueValueRenderer necesita para casar un NULL real. Verificado
-# por render (2026-09-20): con "<Null>" la entidad nula recibe su simbolo; con
-# "NULL", "" o "<null>" cae al simbolo por defecto.
+# Como nombra IUniqueValueRenderer un NULL real al componer el valor.
+# Verificado por render (2026-09-20) y con SymbolByFeature (2026-09-25): con
+# "<Null>" la entidad nula recibe su simbolo; con "NULL", "" o "<null>" cae al
+# simbolo por defecto. En valores de VARIOS campos cada nulo sale como "<Null>"
+# dentro del valor compuesto ("1, <Null>").
 _VALOR_NULO_ARCMAP = u"<Null>"
 
 
@@ -612,6 +621,133 @@ def _campo(attr, que=u"renderer"):
     return attr
 
 
+#: Campos que ArcMap admite en un valor unico compuesto y que se traducen.
+_MAX_CAMPOS_MULTI = 3
+
+
+def _partir_nivel_superior(texto, sep):
+    """Parte `texto` por `sep` fuera de comillas ('..' y "..") y parentesis."""
+    trozos, actual, prof, comilla, i = [], [], 0, None, 0
+    while i < len(texto):
+        c = texto[i]
+        if comilla:
+            actual.append(c)
+            if c == comilla:
+                # '' y "" dentro de una cadena son la comilla escapada.
+                if texto[i + 1:i + 2] == comilla:
+                    actual.append(comilla)
+                    i += 1
+                else:
+                    comilla = None
+        elif c in u"'\"":
+            comilla = c
+            actual.append(c)
+        elif c == u"(":
+            prof += 1
+            actual.append(c)
+        elif c == u")":
+            prof -= 1
+            actual.append(c)
+        elif prof == 0 and texto.startswith(sep, i):
+            trozos.append(u"".join(actual).strip())
+            actual = []
+            i += len(sep)
+            continue
+        else:
+            actual.append(c)
+        i += 1
+    trozos.append(u"".join(actual).strip())
+    return trozos
+
+
+_RE_LITERAL = re.compile(ur"^'((?:[^']|'')*)'$")
+_RE_COALESCE = re.compile(ur"^coalesce\s*\((.*)\)$", re.IGNORECASE)
+
+
+def _termino_concat(termino):
+    """Un termino de la concatenacion -> ('campo', nombre, nulo_vacio) o
+    ('literal', texto, None); None si no es ninguno de los dos."""
+    m = _RE_LITERAL.match(termino)
+    if m:
+        return (u"literal", m.group(1).replace(u"''", u"'"), None)
+    m = _RE_COALESCE.match(termino)
+    if m:
+        args = _partir_nivel_superior(m.group(1), u",")
+        if len(args) == 2 and args[1] == u"''":
+            campo = _termino_concat(args[0])
+            if campo and campo[0] == u"campo":
+                return (u"campo", campo[1], True)
+        return None
+    try:
+        return (u"campo", _campo(termino), False)
+    except SimbologiaNoSoportada:
+        return None
+
+
+def _expresion_multicampo(attr):
+    """Categorizado por `concat(A, 'sep', B[, 'sep', C])` o `A || 'sep' || B`
+    -> (campos, separador, nulo_vacio por campo); None si no es ese patron.
+
+    Es el equivalente de un UniqueValueRenderer de ArcMap de 2-3 campos con
+    FieldDelimiter. Solo campos (o `coalesce(campo, '')`) alternando con UN
+    MISMO separador literal no vacio; cualquier otra cosa sigue siendo una
+    expresion que ArcMap no sabe evaluar.
+
+    `nulo_vacio[i]` dice si QGIS convierte el nulo del campo i en '' dentro
+    del valor: siempre con concat() (convierte los NULL en cadena vacia) y con
+    coalesce(campo, ''). Con `||` sin coalesce, un nulo anula el valor entero
+    y la entidad cae en "todos los demas" (medido en QGIS 3.44.12)."""
+    attr = (attr or u"").strip()
+    if isinstance(attr, bytes):
+        attr = attr.decode("utf-8")
+    m = re.match(ur"^concat\s*\((.*)\)$", attr, re.IGNORECASE | re.DOTALL)
+    if m:
+        terminos, con_concat = _partir_nivel_superior(m.group(1), u","), True
+    else:
+        terminos, con_concat = _partir_nivel_superior(attr, u"||"), False
+    if len(terminos) < 3 or len(terminos) % 2 == 0:
+        return None
+    analizados = [_termino_concat(t) for t in terminos]
+    if None in analizados:
+        return None
+    campos = analizados[0::2]
+    seps = analizados[1::2]
+    if any(t[0] != u"campo" for t in campos) or \
+            any(t[0] != u"literal" for t in seps):
+        return None
+    separadores = set(t[1] for t in seps)
+    if len(separadores) != 1 or not seps[0][1] or \
+            len(campos) > _MAX_CAMPOS_MULTI:
+        return None
+    return ([t[1] for t in campos], seps[0][1],
+            [con_concat or t[2] for t in campos])
+
+
+def _variantes_nulas(valor, separador, nulo_vacio):
+    """Valores con los que ArcMap compone lo que QGIS ve como `valor`.
+
+    QGIS convierte el nulo en '' (concat / coalesce), y ArcMap no: medido con
+    SymbolByFeature el 2026-09-25, un componente nulo sale "<Null>" en una
+    geodatabase y un texto vacio de shapefile sale ' ' (un espacio). Cada
+    componente vacio de un campo con `nulo_vacio` genera esas dos variantes.
+    Si el valor no se parte en tantos trozos como campos (un campo con el
+    separador dentro), no se generan: no se sabe que trozo es cual."""
+    partes = valor.split(separador)
+    if len(partes) != len(nulo_vacio):
+        return []
+    opciones = []
+    for parte, nv in zip(partes, nulo_vacio):
+        if parte == u"" and nv:
+            opciones.append([u"", _VALOR_NULO_ARCMAP, u" "])
+        else:
+            opciones.append([parte])
+    combinados = [u""]
+    for i, alternativas in enumerate(opciones):
+        combinados = [c + (separador if i else u"") + a
+                      for c in combinados for a in alternativas]
+    return [c for c in combinados if c != valor]
+
+
 def _simbolos_visibles(contenedor, etiqueta):
     """Nombres de simbolo de las clases que QGIS SI dibuja (render != false)."""
     return set(e.get("symbol") for e in contenedor.findall(etiqueta)
@@ -619,7 +755,17 @@ def _simbolos_visibles(contenedor, etiqueta):
 
 
 def _renderer_categorizado(rend_elem, avisos):
-    campo = _campo(rend_elem.get("attr"), u"renderer categorizado")
+    multi = _expresion_multicampo(rend_elem.get("attr"))
+    if multi:
+        campos, separador, nulo_vacio = multi
+        avisos.append(
+            u"categorizado por la expresion '%s': se emite como valores unicos "
+            u"de %d campos (%s) con separador '%s'"
+            % (rend_elem.get("attr"), len(campos), u", ".join(campos),
+               separador))
+    else:
+        campos = [_campo(rend_elem.get("attr"), u"renderer categorizado")]
+        separador, nulo_vacio = None, None
     clases, default_simbolo, default_label = [], None, u""
 
     cats = rend_elem.find("categories")
@@ -661,17 +807,14 @@ def _renderer_categorizado(rend_elem, avisos):
             continue
 
         if cat.get("type") == "NULL":
-            # Categoria de valores NULOS. QGIS la serializa type="NULL"
-            # value="NULL": emitirla tal cual mandaria a ArcMap a casar el
-            # TEXTO "NULL". Verificado por render (2026-09-20): el valor que
-            # casa los nulos reales de ArcMap es exactamente "<Null>".
-            clases.append(ClaseValor(valor=_VALOR_NULO_ARCMAP, label=label,
-                                     simbolo=simbolo))
-            avisos.append(
-                u"categoria '%s' de valores NULOS: se emite con el valor "
-                u"'%s', que es como ArcMap nombra el nulo (un shapefile no "
-                u"guarda nulos: alli no casara ninguna entidad)"
-                % (label, _VALOR_NULO_ARCMAP))
+            # La categoria NULL de QGIS (type="NULL" value="NULL") NO es "solo
+            # los nulos": es el cajon de "todos los demas valores". Medido con
+            # symbolForFeature en QGIS 3.44.12 (2026-09-25): recoge los nulos
+            # Y cualquier valor sin categoria. Su equivalente en ArcMap es el
+            # simbolo por defecto, que tambien recoge los nulos (medido con
+            # SymbolByFeature). Emitirla como clase "<Null>" (lo que se hacia)
+            # dejaba SIN DIBUJAR en ArcMap todo valor sin categoria.
+            default_simbolo, default_label = simbolo, label
             continue
 
         valor = cat.get("value")
@@ -683,9 +826,34 @@ def _renderer_categorizado(rend_elem, avisos):
 
     if not clases:
         raise SimbologiaNoSoportada(u"categorizado sin clases con valor")
-    return RendererValoresUnicos(campos=[campo], clases=clases,
+    if multi:
+        _anadir_variantes_nulas(clases, separador, nulo_vacio, avisos)
+    return RendererValoresUnicos(campos=campos, clases=clases,
                                  default_simbolo=default_simbolo,
-                                 default_label=default_label)
+                                 default_label=default_label,
+                                 separador=separador)
+
+
+def _anadir_variantes_nulas(clases, separador, nulo_vacio, avisos):
+    """Cuelga de cada clase los valores con que ArcMap escribe sus nulos
+    (`_variantes_nulas`). Una variante que ya es el valor de otra clase no se
+    anade: en QGIS esa otra clase es la que manda para ese valor."""
+    explicitos = set(c.valor for c in clases)
+    for clase in clases:
+        variantes = [v for v in _variantes_nulas(clase.valor, separador,
+                                                 nulo_vacio)
+                     if v not in explicitos]
+        if not variantes:
+            continue
+        clase.variantes = variantes
+        explicitos.update(variantes)
+        avisos.append(
+            u"categoria '%s' con un campo vacio: en QGIS casa tambien el nulo, "
+            u"asi que en ArcMap agrupa ademas %s (nulo de geodatabase y texto "
+            u"vacio de shapefile). Si ese campo es NUMERICO en un shapefile, "
+            u"ArcMap lee su nulo como 0 y esas entidades no casaran"
+            % (clase.label or clase.valor,
+               u", ".join(u"'%s'" % v for v in variantes)))
 
 
 def _renderer_graduado(rend_elem, avisos):
@@ -798,7 +966,7 @@ def _transparencias_por_valor(rr_elem, avisos):
     rt = rr_elem.find("rasterTransparency")
     if rt is None:
         return fuera
-    if rt.find("threeValuePixelList") is not None:
+    if rt.find("threeValuePixelList/pixelListEntry") is not None:
         avisos.append(u"la capa oculta valores por combinacion RGB: ArcMap no "
                       u"lo reproduce")
     for e in rt.iter("pixelListEntry"):
@@ -817,6 +985,59 @@ def _transparencias_por_valor(rr_elem, avisos):
             continue
         fuera[float(vmin)] = pct
     return fuera
+
+
+#: Realces de contraste de QGIS que se traducen, por banda.
+_REALCES_RGB = (u"NoEnhancement", u"StretchToMinimumMaximum",
+                u"StretchAndClipToMinimumMaximum", u"ClipToMinimumMaximum")
+
+
+def _banda_rgb(valor):
+    n = int(valor or -1)
+    return n if n >= 1 else None
+
+
+def _renderer_rgb(rr_elem, avisos):
+    """<rasterrenderer type="multibandcolor"> -> RendererRasterRGB.
+
+    Medido el 2026-09-25 con la orto PNOA 2025 de Murcia: QGIS sin realce y
+    ArcMap RGB 1-2-3 sin estirado dan las mismas medias por canal (+-0,1).
+    Los realces se traducen solo si las tres bandas usan el mismo: mezclar
+    «sin realce» en una y «estirado» en otra exige el rango del tipo de dato,
+    que el estilo no dice."""
+    bandas = tuple(_banda_rgb(rr_elem.get(k))
+                   for k in ("redBand", "greenBand", "blueBand"))
+    if not any(bandas):
+        raise SimbologiaNoSoportada(u"RGB sin ninguna banda asignada")
+    alfa = _banda_rgb(rr_elem.get("alphaBand"))
+    _transparencias_por_valor(rr_elem, avisos)
+    realces = []
+    for color, banda in zip((u"red", u"green", u"blue"), bandas):
+        if banda is None:
+            continue
+        ce = rr_elem.find(color + "ContrastEnhancement")
+        algoritmo = ce.findtext("algorithm") if ce is not None else \
+            u"NoEnhancement"
+        if algoritmo not in _REALCES_RGB:
+            raise SimbologiaNoSoportada(
+                u"RGB con realce '%s' en la banda %s: solo se traduce sin "
+                u"realce o estirado entre minimo y maximo" % (algoritmo, color))
+        minimo = float(ce.findtext("minValue")) if ce is not None else None
+        maximo = float(ce.findtext("maxValue")) if ce is not None else None
+        realces.append((algoritmo, minimo, maximo))
+    if len(set(a for a, _, _ in realces)) > 1:
+        raise SimbologiaNoSoportada(
+            u"RGB con realces distintos por banda (%s): ArcMap estira las "
+            u"tres igual" % u", ".join(a for a, _, _ in realces))
+    algoritmo = realces[0][0]
+    if algoritmo == u"NoEnhancement":
+        return RendererRasterRGB(bandas=bandas, alfa=alfa)
+    if algoritmo != u"StretchToMinimumMaximum":
+        avisos.append(u"RGB con '%s': QGIS no pinta los valores fuera del "
+                      u"rango y ArcMap los pinta con el color del extremo"
+                      % algoritmo)
+    return RendererRasterRGB(bandas=bandas, alfa=alfa,
+                             estirado=[(mn, mx) for _, mn, mx in realces])
 
 
 def _pseudocolor_interpolado(rr_elem, shader, ocultos, avisos):
@@ -877,6 +1098,9 @@ def _renderer_raster(rr_elem, avisos):
     """<rasterrenderer> -> renderer del modelo. paletted, pseudocolor DISCRETE
     (clases) y pseudocolor INTERPOLATED (estirado)."""
     tipo = rr_elem.get("type")
+
+    if tipo == "multibandcolor":
+        return _renderer_rgb(rr_elem, avisos)
 
     if rr_elem.get("alphaBand") not in (None, "-1"):
         avisos.append(u"la capa usa banda alfa (%s): ArcMap no la aplica"
@@ -1164,6 +1388,45 @@ def ruta_dataset(ruta, layername=None, layerid=None):
     return ruta
 
 
+def _prefijo_ruta(texto):
+    """Prefijo de ruta normalizado: barras de Windows y sin separador final.
+    `Z:`, `Z:\\` y `Z:/` quedan igual (`Z:`)."""
+    return texto.strip().replace(u"/", u"\\").rstrip(u"\\")
+
+
+def parse_remap(texto):
+    """'Z:=L:\\Mi unidad\\Carto' -> (u'Z:', u'L:\\Mi unidad\\Carto').
+
+    Regla de `--remap`: el prefijo de la IZQUIERDA es el que escribe el
+    proyecto (y el que conserva el .lyr); el de la DERECHA, donde se lee el dato
+    en esta maquina. Se parte por el PRIMER `=`: una ruta de Windows no lo lleva
+    en la unidad, pero si podria llevarlo mas adentro."""
+    origen, sep, destino = texto.partition(u"=")
+    origen, destino = _prefijo_ruta(origen), _prefijo_ruta(destino)
+    if not sep or not origen or not destino:
+        raise ValueError(u"regla de --remap mal formada: %r (se espera "
+                         u"ORIGEN=DESTINO, p.ej. \"Z:=L:\\Mi unidad\\Carto\")"
+                         % texto)
+    return origen, destino
+
+
+def remapear(ruta, reglas):
+    """Aplica la primera regla cuyo ORIGEN es prefijo de `ruta`.
+
+    -> (ruta donde leer el dato, regla aplicada o None). El prefijo tiene que
+    acabar en un separador de la ruta: `C:\\datos` no casa con
+    `C:\\datos_viejos\\x.shp`. Sin distinguir mayusculas, como Windows."""
+    if not ruta:
+        return ruta, None
+    normal = ruta.replace(u"/", u"\\")
+    for origen, destino in reglas or ():
+        n = len(origen)
+        if normal[:n].lower() == origen.lower() and (
+                len(normal) == n or normal[n] == u"\\"):
+            return destino + normal[n:], (origen, destino)
+    return ruta, None
+
+
 #: Tokens del URI de OGR que sabemos leer o descartar a sabiendas. Cualquier
 #: otro se avisa en vez de tirarse en silencio.
 _TOKENS_DATASOURCE = (u"subset=", u"layername=", u"layerid=", u"geometrytype=")
@@ -1204,6 +1467,138 @@ def _partir_datasource(datasource, avisos=None):
     return ruta_dataset(trozos[0], layername, layerid), defquery
 
 
+def _vbscript_literal(texto):
+    return u'"%s"' % texto.replace(u'"', u'""')
+
+
+def _expresion_etiqueta(texto, es_expresion, avisos):
+    """Campo o expresion de etiqueta de QGIS -> expresion VBScript de ArcMap,
+    o None si no se sabe traducir.
+
+    Se traduce un campo suelto y la concatenacion de campos y literales
+    (`concat(...)`, `||`, con o sin `coalesce(campo, '')`): `[A] & " - " & [B]`.
+    El `&` de VBScript trata el nulo como cadena vacia, igual que concat() y
+    coalesce(); con `||` sin coalesce QGIS no etiqueta si un campo es nulo, y
+    eso se avisa."""
+    texto = (texto or u"").strip()
+    if not texto:
+        return None
+    if not es_expresion:
+        return u"[%s]" % texto
+    m = re.match(ur"^concat\s*\((.*)\)$", texto, re.IGNORECASE | re.DOTALL)
+    if m:
+        terminos, con_barras = _partir_nivel_superior(m.group(1), u","), False
+    else:
+        terminos = _partir_nivel_superior(texto, u"||")
+        con_barras = len(terminos) > 1
+    partes, nulos_anulan = [], False
+    for termino in terminos:
+        analizado = _termino_concat(termino)
+        if analizado is None:
+            return None
+        tipo, valor, nulo_vacio = analizado
+        if tipo == u"literal":
+            partes.append(_vbscript_literal(valor))
+        else:
+            partes.append(u"[%s]" % valor)
+            nulos_anulan = nulos_anulan or (con_barras and not nulo_vacio)
+    if nulos_anulan:
+        avisos.append(u"etiqueta '%s': con '||' QGIS no etiqueta la entidad si "
+                      u"un campo es nulo; ArcMap (con &) etiqueta el resto"
+                      % texto)
+    return u" & ".join(partes)
+
+
+def _dd_activas_etiqueta(settings):
+    """Propiedades data-defined ACTIVAS del etiquetado (`<dd_properties>`,
+    mismo formato que `<data_defined_properties>` de los simbolos)."""
+    activas = []
+    for dd in settings.findall("dd_properties"):
+        for mapa in dd.findall("Option"):
+            for props in mapa.findall("Option"):
+                if props.get("name") != "properties":
+                    continue
+                for prop in props.findall("Option"):
+                    for campo in prop.findall("Option"):
+                        if campo.get("name") == "active" and \
+                                (campo.get("value") or u"").lower() == u"true":
+                            activas.append(prop.get("name") or u"?")
+    return activas
+
+
+def _etiquetado(elem, avisos):
+    """<labeling> de la capa -> Etiquetado, o None avisando de por que no.
+
+    Solo el etiquetado SIMPLE de QGIS. Lo que no se sabe traducir se avisa y la
+    capa sale sin etiquetas: la simbologia no depende de ello."""
+    if elem.get("labelsEnabled") != "1":
+        return None
+    lab = elem.find("labeling")
+    tipo = lab.get("type") if lab is not None else None
+    if tipo != u"simple":
+        avisos.append(u"etiquetado '%s' de QGIS (solo se traduce el simple): "
+                      u"el .lyr sale sin etiquetar" % (tipo or u"desconocido"))
+        return None
+    settings = lab.find("settings")
+    estilo = settings.find("text-style") if settings is not None else None
+    if estilo is None:
+        avisos.append(u"etiquetado sin <text-style>: el .lyr sale sin etiquetar")
+        return None
+    expresion = _expresion_etiqueta(estilo.get("fieldName"),
+                                    estilo.get("isExpression") == "1", avisos)
+    if expresion is None:
+        avisos.append(u"etiqueta por la expresion '%s': ArcMap no evalua "
+                      u"expresiones de QGIS (solo campos y concatenaciones); "
+                      u"el .lyr sale sin etiquetar" % estilo.get("fieldName"))
+        return None
+    try:
+        tamano = _a_puntos(estilo.get("fontSize") or 10,
+                           estilo.get("fontSizeUnit") or u"Point",
+                           u"tamano de etiqueta")
+        color, alfa = _rgb(estilo.get("textColor"), u"color de etiqueta")
+        halo = None
+        # <text-buffer> cuelga DENTRO de <text-style> (QGIS 3.44).
+        buf = estilo.find("text-buffer")
+        if buf is not None and buf.get("bufferDraw") == "1":
+            halo_rgb, halo_alfa = _rgb(buf.get("bufferColor"),
+                                       u"color del halo")
+            halo = (_a_puntos(buf.get("bufferSize") or 1,
+                              buf.get("bufferSizeUnits") or u"MM",
+                              u"tamano del halo"), halo_rgb)
+            if halo_alfa != 255 or \
+                    float(buf.get("bufferOpacity") or 1) < 1:
+                avisos.append(u"halo de etiqueta semitransparente: ArcMap lo "
+                              u"pinta opaco")
+    except SimbologiaNoSoportada as e:
+        avisos.append(u"%s: el .lyr sale sin etiquetar" % e)
+        return None
+    if alfa != 255 or float(estilo.get("textOpacity") or 1) < 1:
+        avisos.append(u"texto de etiqueta semitransparente: ArcMap lo pinta "
+                      u"opaco")
+    escala_min, escala_max = 0.0, 0.0
+    rend = settings.find("rendering")
+    if rend is not None and rend.get("scaleVisibility") == "1":
+        # GOTCHA (medido en QGIS 3.44.12, 2026-09-25): en el XML de etiquetas
+        # los nombres van AL REVES que en la API. `scaleMax` es el
+        # minimumScale de QgsPalLayerSettings (limite ALEJADO, denominador
+        # grande) y `scaleMin` el maximumScale (limite acercado).
+        escala_min = float(rend.get("scaleMax") or 0)
+        escala_max = float(rend.get("scaleMin") or 0)
+    activas = _dd_activas_etiqueta(settings)
+    if activas:
+        avisos.append(u"etiquetas con propiedades data-defined activas (%s): "
+                      u"ArcMap usa el valor fijo del estilo" % u", ".join(activas))
+    avisos.append(u"etiquetas con el motor ESTANDAR de ArcMap: la colocacion "
+                  u"de QGIS no se traslada. En un mapa con Maplex se pintan "
+                  u"igual, pero la colocacion la decide Maplex")
+    return Etiquetado(expresion=expresion,
+                      fuente=estilo.get("fontFamily") or u"Arial",
+                      tamano_pt=tamano, color=color,
+                      negrita=int(estilo.get("fontWeight") or 50) >= 63,
+                      cursiva=estilo.get("fontItalic") == "1", halo=halo,
+                      escala_min=escala_min, escala_max=escala_max)
+
+
 def _cabecera_capa(elem, avisos):
     """Atributos de CAPA (no de simbolo) -> dict, y avisos de lo que se pierde.
 
@@ -1219,12 +1614,7 @@ def _cabecera_capa(elem, avisos):
     GOTCHA heredado: en un raster la opacidad NO esta en <layerOpacity> (que no
     aparece) sino en el atributo `opacity` del <rasterrenderer>.
     """
-    if elem.get("labelsEnabled") == "1":
-        # Las etiquetas son otro sistema entero (ILabelEngineLayerProperties),
-        # fuera del MVP de simbologia. Pero el usuario tiene que enterarse de
-        # que su capa etiquetada llega a ArcMap muda.
-        avisos.append(u"la capa lleva etiquetas activas en QGIS: el .lyr sale "
-                      u"sin etiquetar (fuera del alcance del MVP)")
+    etiquetado = _etiquetado(elem, avisos)
 
     rr_elem = elem.find("pipe/rasterrenderer")
     if rr_elem is not None:
@@ -1244,7 +1634,7 @@ def _cabecera_capa(elem, avisos):
         escala_min = float(elem.get("minScale") or 0)
         escala_max = float(elem.get("maxScale") or 0)
     return {"opacidad": opacidad, "escala_min": escala_min,
-            "escala_max": escala_max}
+            "escala_max": escala_max, "etiquetado": etiquetado}
 
 
 def _capas_desde_estilo(elem, nombre, avisos):
@@ -1279,11 +1669,62 @@ def _aplicar_cabecera(capas, cabecera, datasource=None, defquery=None):
         capa.opacidad = cabecera["opacidad"]
         capa.escala_min = cabecera["escala_min"]
         capa.escala_max = cabecera["escala_max"]
+        capa.etiquetado = cabecera.get("etiquetado")
         if datasource is not None:
             capa.datasource = datasource
         # La def-query de la CAPA acota a todas las reglas.
         capa.defquery = combinar_defquery(defquery, capa.defquery)
     return capas
+
+
+def _parametros_uri(datasource):
+    """URI de proveedor de QGIS (`clave=valor&clave=valor`) -> lista de pares,
+    en orden y con las claves repetidas (`layers=` y `styles=` lo son)."""
+    pares = []
+    for trozo in (datasource or u"").split(u"&"):
+        clave, _, valor = trozo.partition(u"=")
+        if clave:
+            pares.append((clave, _unquote(valor)))
+    return pares
+
+
+def _servicio_wms(maplayer_elem, nombre, avisos):
+    """<maplayer> con proveedor `wms` -> ServicioWMS o ServicioWMTS (el mismo
+    proveedor de QGIS sirve los dos); SimbologiaNoSoportada si es un XYZ."""
+    pares = _parametros_uri(maplayer_elem.findtext("datasource"))
+    params = dict(pares)
+    url = params.get(u"url")
+    if params.get(u"type") == u"xyz":
+        raise SimbologiaNoSoportada(
+            u"'%s' es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
+            u"tipo de capa para ellas" % (nombre, url))
+    if not url:
+        raise SimbologiaNoSoportada(u"capa WMS '%s' sin url= en el origen de "
+                                    u"datos" % nombre)
+    capas = [v for k, v in pares if k == u"layers" and v]
+    if not capas:
+        raise SimbologiaNoSoportada(u"capa WMS '%s' sin layers=: no se sabe "
+                                    u"que subcapas encender" % nombre)
+    if params.get(u"tileMatrixSet"):
+        # WMTS: una capa y una matriz de teselas (QGIS no pide mas de una).
+        if len(capas) > 1:
+            raise SimbologiaNoSoportada(
+                u"WMTS '%s' con varias capas (%s): un WMTS sirve una"
+                % (nombre, u", ".join(capas)))
+        return ServicioWMTS(url=url, capa=capas[0],
+                            matriz=params[u"tileMatrixSet"],
+                            estilo=params.get(u"styles") or None,
+                            formato=params.get(u"format"))
+    estilos = [v for k, v in pares if k == u"styles"]
+    if any(estilos):
+        avisos.append(u"estilos WMS (%s) no trasladados: ArcMap pide cada "
+                      u"subcapa con su estilo por defecto"
+                      % u", ".join(e for e in estilos if e))
+    if params.get(u"authcfg") or params.get(u"username"):
+        avisos.append(u"el servicio usa credenciales en QGIS: el .lyr no las "
+                      u"lleva y ArcMap las pedira al conectar")
+    return ServicioWMS(url=url, capas=capas, estilos=estilos,
+                       formato=params.get(u"format"), crs=params.get(u"crs"))
 
 
 def parse_maplayer(maplayer_elem):
@@ -1294,6 +1735,10 @@ def parse_maplayer(maplayer_elem):
     """
     nombre = maplayer_elem.findtext("layername") or u"sin_nombre"
     avisos = []
+    if maplayer_elem.findtext("provider") == u"wms":
+        capa = CapaEstilo(nombre=nombre, renderer=None, avisos=avisos)
+        capa.servicio = _servicio_wms(maplayer_elem, nombre, avisos)
+        return _aplicar_cabecera([capa], _cabecera_capa(maplayer_elem, avisos))
     ruta, defquery_ds = _partir_datasource(
         maplayer_elem.findtext("datasource"), avisos)
     defquery = maplayer_elem.findtext("subsetstring") or defquery_ds or None

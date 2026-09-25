@@ -25,6 +25,8 @@ from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
 
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
+QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
+QGZ_WMS = os.path.join(RAIZ, "tests", "fixtures", "batch_wms.qgz")
 MM2PT = 2.834645669
 
 
@@ -199,6 +201,177 @@ def test_datasource_y_campos(fallos):
     ruta, defquery = parser_qgis._partir_datasource(
         u"C:\\x\\y.shp|subset=\"A\" = 'x|y'")
     _igual(fallos, defquery, u"\"A\" = 'x|y'", u"| dentro de un literal")
+
+
+def test_categoria_resto_nula(fallos):
+    """QGIS 3.44.12: la categoria NULL es "todos los demas" -> simbolo por
+    defecto, no una clase "<Null>"."""
+    rend = _qml("categoria_resto_nula.qml")[0].renderer
+    _igual(fallos, [c.valor for c in rend.clases], [u"A"], u"clases")
+    _igual(fallos, rend.default_label, u"Todos los demas valores",
+           u"etiqueta del simbolo por defecto")
+    if rend.default_simbolo is None:
+        fallos.append(u"sin simbolo por defecto")
+
+
+def test_categorizado_multicampo(fallos):
+    """QGIS 3.44.12: concat(coalesce(G,''), ', ', coalesce(R,'')) -> 2 campos
+    con separador, y variantes de nulo para las categorias con un vacio."""
+    capa = _qml("categorizado_multicampo.qml")[0]
+    rend = capa.renderer
+    _igual(fallos, rend.campos, [u"G", u"R"], u"campos")
+    _igual(fallos, rend.separador, u", ", u"separador")
+    _igual(fallos, dict((c.valor, sorted(c.variantes)) for c in rend.clases),
+           {u"1, Forestal MUP": [], u"1, ": [u"1,  ", u"1, <Null>"],
+            u", Rural": [u" , Rural", u"<Null>, Rural"]}, u"variantes")
+    _igual(fallos, rend.default_label, u"Todos los demas valores", u"resto")
+    if not any(u"valores unicos de 2 campos" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la traduccion: %s" % capa.avisos)
+
+    # Con || sin coalesce el nulo anula el valor: sin variantes.
+    rend = _qml("categorizado_multicampo_barras.qml")[0].renderer
+    _igual(fallos, rend.campos, [u"G", u"R"], u"campos con ||")
+    _igual(fallos, [c.variantes for c in rend.clases], [[], []],
+           u"sin variantes con ||")
+
+
+def test_expresion_multicampo(fallos):
+    """Patrones que se traducen y los que siguen siendo una expresion."""
+    f = parser_qgis._expresion_multicampo
+    _igual(fallos, f(u'concat("A", \' - \', "B", \' - \', "C")'),
+           ([u"A", u"B", u"C"], u" - ", [True, True, True]), u"concat de 3")
+    _igual(fallos, f(u"coalesce(\"A\",'') || '/' || B"),
+           ([u"A", u"B"], u"/", [True, False]), u"|| con un coalesce")
+    _igual(fallos, f(u"CONCAT(\"A\", 'it''s', \"B\")"),
+           ([u"A", u"B"], u"it's", [True, True]), u"comilla escapada")
+    for no in (u'"A"',                                       # un solo campo
+               u'concat("A", \', \', "B", \', \', "C", \', \', "D")',  # 4
+               u'concat("A", \', \', "B", \' - \', "C")',    # separadores distintos
+               u'concat("A", "B")',                          # sin separador
+               u'concat("A", \'\', "B")',                    # separador vacio
+               u'concat(upper("A"), \', \', "B")',           # funcion
+               u'concat(coalesce("A", \'x\'), \', \', "B")',  # coalesce a otra cosa
+               u'"A" + \', \' + "B"'):                       # otro operador
+        if f(no) is not None:
+            fallos.append(u"deberia seguir siendo expresion: %s -> %r"
+                          % (no, f(no)))
+
+
+def test_wms(fallos):
+    """QGIS 3.44.12 (fixture contra el WMS local): url, layers= en orden,
+    opacidad del rasterrenderer; el WMTS con su capa y su matriz. XYZ se
+    rechaza diciendo por que."""
+    capas = dict((ml.findtext("layername"), parser_qgis.parse_maplayer(ml)[0])
+                 for ml in parser_qgis._raiz_qgs(QGZ_WMS).iter("maplayer")
+                 if ml.findtext("layername"))
+    dos = capas[u"WMS dos hojas"]
+    _igual(fallos, dos.servicio.capas, [u"parcelas", u"textos"], u"layers=")
+    _igual(fallos, dos.servicio.url, u"http://127.0.0.1:8765/wms", u"url")
+    _igual(fallos, dos.opacidad, 0.7, u"opacidad")
+    _igual(fallos, dos.renderer, None, u"sin renderer")
+
+    import xml.etree.ElementTree as ET
+
+    def _capa(datasource):
+        ml = ET.Element("maplayer")
+        ET.SubElement(ml, "layername").text = u"x"
+        ET.SubElement(ml, "provider").text = u"wms"
+        ET.SubElement(ml, "datasource").text = datasource
+        return ml
+    # Datasource literal del WMTS del IGN en un proyecto real (2026-09-25).
+    wmts = (u"contextualWMSLegend=0&crs=EPSG:25830&dpiMode=7&featureCount=10&"
+            u"format=image/png&layers=MTN&styles=default&tileMatrixSet="
+            u"EPSG:25830&url=http://www.ign.es/wmts/mapa-raster")
+    ign = parser_qgis.parse_maplayer(_capa(wmts))[0].servicio
+    _igual(fallos, (type(ign).__name__, ign.url, ign.capa, ign.matriz,
+                    ign.estilo, ign.formato),
+           (u"ServicioWMTS", u"http://www.ign.es/wmts/mapa-raster", u"MTN",
+            u"EPSG:25830", u"default", u"image/png"), u"WMTS del IGN")
+    mapa = capas[u"WMTS mapa"].servicio
+    _igual(fallos, (mapa.capa, mapa.matriz), (u"mapa", u"EPSG:25830"),
+           u"WMTS del fixture")
+    try:
+        parser_qgis.parse_maplayer(_capa(
+            u"type=xyz&url=https://tile.openstreetmap.org/%7Bz%7D/%7Bx%7D/%7By%7D.png"))
+        fallos.append(u"un XYZ deberia rechazarse")
+    except SimbologiaNoSoportada as e:
+        if u"XYZ" not in unicode(e):
+            fallos.append(u"mensaje del XYZ: %s" % e)
+    # Estilo no vacio: se avisa.
+    capa = parser_qgis.parse_maplayer(_capa(
+        u"format=image/png&layers=a&styles=raro&url=http://x/wms"))[0]
+    if not any(u"raro" in a for a in capa.avisos):
+        fallos.append(u"no avisa del estilo WMS: %s" % capa.avisos)
+
+
+def test_etiquetas(fallos):
+    """QGIS 3.44.12: etiqueta simple, por concatenacion y no traducible."""
+    e = _qml("etiquetas_simples.qml")[0].etiquetado
+    _igual(fallos, (e.expresion, e.fuente, e.tamano_pt, e.color, e.negrita,
+                    e.cursiva), (u"[TIPO]", u"Arial", 10.0, (18, 52, 86), True,
+                                 True), u"etiqueta simple")
+    _cerca(fallos, e.halo[0], MM2PT, u"halo de 1 mm en puntos")
+    _igual(fallos, e.halo[1], (255, 255, 0), u"color del halo")
+    # En el XML van al reves que en la API: scaleMax es el limite ALEJADO.
+    _igual(fallos, (e.escala_min, e.escala_max), (50000.0, 1000.0), u"escalas")
+
+    capa = _qml("etiquetas_expresion.qml")[0]
+    _igual(fallos, capa.etiquetado.expresion, u'[G] & " - " & [R]',
+           u"concatenacion a VBScript")
+    _cerca(fallos, capa.etiquetado.tamano_pt, 3 * MM2PT, u"tamano de 3 mm")
+    if not any(u"||" in a for a in capa.avisos):
+        fallos.append(u"no avisa del || con nulos: %s" % capa.avisos)
+
+    capa = _qml("etiquetas_no_traducible.qml")[0]
+    _igual(fallos, capa.etiquetado, None, u"upper() no se traduce")
+    if not any(u"upper" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la expresion: %s" % capa.avisos)
+
+
+def test_raster_rgb(fallos):
+    """QGIS 3.44.12: multibandcolor -> bandas, realce y tramos por banda."""
+    r = _qml("raster_rgb_sin_realce.qml")[0].renderer
+    _igual(fallos, (r.bandas, r.alfa, r.estirado), ((1, 2, 3), None, None),
+           u"RGB sin realce")
+    r = _qml("raster_rgb_estirado.qml")[0].renderer
+    _igual(fallos, (r.bandas, r.estirado),
+           ((3, 2, 1), [(0.0, 200.0), (10.0, 220.0), (20.0, 240.0)]),
+           u"RGB estirado con bandas cambiadas")
+    try:
+        _qml("raster_rgb_mixto.qml")
+        fallos.append(u"realces mezclados deberian rechazarse")
+    except SimbologiaNoSoportada as e:
+        if u"distintos por banda" not in unicode(e):
+            fallos.append(u"mensaje de realces mezclados: %s" % e)
+
+
+def test_remap(fallos):
+    """Reglas de --remap: prefijo con frontera de separador y sin mayusculas."""
+    regla = parser_qgis.parse_remap(u"Z:=L:\\Mi unidad\\Carto\\")
+    _igual(fallos, regla, (u"Z:", u"L:\\Mi unidad\\Carto"), u"regla")
+    _igual(fallos, parser_qgis.parse_remap(u"z:/=L:/Carto"),
+           (u"z:", u"L:\\Carto"), u"regla con barras de QGIS")
+    _igual(fallos, parser_qgis.remapear(u"Z:\\LiDAR\\a.tif", [regla]),
+           (u"L:\\Mi unidad\\Carto\\LiDAR\\a.tif", regla), u"ruta remapeada")
+    _igual(fallos, parser_qgis.remapear(u"z:/LiDAR/a.tif", [regla])[0],
+           u"L:\\Mi unidad\\Carto\\LiDAR\\a.tif", u"minusculas y barras /")
+    otra = parser_qgis.parse_remap(u"C:\\datos=D:\\datos")
+    _igual(fallos, parser_qgis.remapear(u"C:\\datos_viejos\\x.shp", [otra]),
+           (u"C:\\datos_viejos\\x.shp", None), u"prefijo sin frontera")
+    _igual(fallos, parser_qgis.remapear(u"X:\\a.shp", [regla, otra]),
+           (u"X:\\a.shp", None), u"ninguna regla casa")
+    for mala in (u"Z:", u"=L:\\x", u"Z:="):
+        try:
+            parser_qgis.parse_remap(mala)
+            fallos.append(u"regla mal formada aceptada: %r" % mala)
+        except ValueError:
+            pass
+    capas = parser_qgis._raiz_qgs(QGZ_REMAP).iter("maplayer")
+    fuentes = sorted(parser_qgis.parse_maplayer(ml)[0].datasource
+                     for ml in capas)
+    _igual(fallos, fuentes, [u"Q:/paleta.tif", u"Q:/poligonos.shp",
+                             u"Q:/zonas.gpkg\\main.zonas"],
+           u"datasources del fixture de --remap")
 
 
 TESTS = [(n, f) for n, f in sorted(globals().items())

@@ -14,7 +14,7 @@ import sys
 sys.coinit_flags = 2
 import json
 
-from emisor import _init_arcobjects, _mods, _nobj, _qi
+from emisor import _init_arcobjects, _lib_path, _mods, _nobj, _qi
 
 # esriSimpleLineStyle
 _NOMBRE_ESTILO_LINEA = {0: "solid", 1: "dash", 2: "dot", 3: "dashdot",
@@ -157,13 +157,22 @@ def _dump_valores_unicos(uv):
     clases = []
     for i in range(uv.ValueCount):
         valor = uv.Value[i]
-        clases.append({"valor": valor,
-                       "label": uv.Label[valor] or u"",
-                       "simbolo": _dump_simbolo(uv.Symbol[valor])})
+        clase = {"valor": valor,
+                 "label": uv.Label[valor] or u"",
+                 "simbolo": _dump_simbolo(uv.Symbol[valor])}
+        try:
+            # Solo existe para un valor agrupado bajo otro (AddReferenceValue);
+            # para uno propio, ArcObjects da E_INVALIDARG.
+            clase["referencia"] = uv.ReferenceValue[valor]
+        except Exception:
+            pass
+        clases.append(clase)
     d = {"tipo": "valores_unicos",
          "campos": campos,
          "clases": clases,
          "usa_default": bool(uv.UseDefaultSymbol)}
+    if len(campos) > 1:
+        d["separador"] = uv.FieldDelimiter
     if d["usa_default"]:
         d["default_label"] = uv.DefaultLabel or u""
         d["default_simbolo"] = _dump_simbolo(uv.DefaultSymbol)
@@ -195,8 +204,47 @@ def _dump_renderer(rend):
     return {"tipo": "no-soportado", "clase": type(rend).__name__}
 
 
+def _dump_rgb(rgb, rend):
+    """RasterRGBRenderer -> dict (bandas desde 1, como en QGIS)."""
+    _, CA = _mods()
+    d = {"tipo": "raster_rgb", "bandas": [
+        (idx + 1) if usar else None for usar, idx in (
+            (rgb.UseRedBand, rgb.RedBandIndex),
+            (rgb.UseGreenBand, rgb.GreenBandIndex),
+            (rgb.UseBlueBand, rgb.BlueBandIndex))]}
+    rgb2 = _qi(rend, CA.IRasterRGBRenderer2)
+    if rgb2 is not None and rgb2.UseAlphaBand:
+        d["alfa"] = rgb2.AlphaBandIndex + 1
+    est = _qi(rend, CA.IRasterStretch2)
+    d["estirado"] = {CA.esriRasterStretch_NONE: "ninguno",
+                     CA.esriRasterStretch_MinimumMaximum: "minmax"}.get(
+        est.StretchType, "otro:%s" % est.StretchType)
+    if d["estirado"] == "minmax" and \
+            est.StretchStatsType == CA.esriRasterStretchStats_GlobalStats:
+        # Tramo EFECTIVO por banda (medido, ver el emisor): en 8 bits, las
+        # estadisticas tal cual; en otros tipos ArcMap pinta entre min + 5% y
+        # max - 5%.
+        import comtypes.gen.esriDataSourcesRaster as DSR
+        import comtypes.gen.esriGeoDatabase as GDB
+        raster = _qi(rend, CA.IRasterRenderer).Raster
+        tipo = _qi(raster, DSR.IRasterProps).PixelType
+        ocho_bits = tipo in (GDB.PT_UCHAR, GDB.PT_CHAR)
+        tramos = []
+        estadisticas = est.StretchStats
+        for i in range(estadisticas.Count):
+            h = _qi(estadisticas.Element[i], DSR.IStatsHistogram)
+            margen = 0.0 if ocho_bits else 0.05 * (h.Max - h.Min)
+            tramos.append([round(h.Min + margen, 3), round(h.Max - margen, 3)])
+        d["tramos"] = tramos
+    return d
+
+
 def _dump_renderer_raster(rend):
     _, CA = _mods()
+
+    rgb = _qi(rend, CA.IRasterRGBRenderer)
+    if rgb is not None:
+        return _dump_rgb(rgb, rend)
 
     uv = _qi(rend, CA.IRasterUniqueValueRenderer)
     if uv is not None:
@@ -274,6 +322,54 @@ def _dump_rampa(ramp):
     return {"tipo": "otra", "tamanyo": int(ramp.Size)}
 
 
+def _dump_etiquetas(capa_geo):
+    """Clases de etiqueta de la capa (solo si las muestra)."""
+    D, CA = _mods()
+    col = _qi(capa_geo.AnnotationProperties,
+              CA.IAnnotateLayerPropertiesCollection2)
+    clases = []
+    for k in range(col.Count):
+        anotar = col.Properties[k]
+        lep = _qi(anotar, CA.ILabelEngineLayerProperties)
+        if lep is None:
+            clases.append({"tipo": "no-estandar"})
+            continue
+        ts = lep.Symbol
+        fuente = ts.Font
+        clase = {"expresion": lep.Expression,
+                 "fuente": fuente.Name, "tamano": round(ts.Size, 3),
+                 "negrita": bool(fuente.Bold), "cursiva": bool(fuente.Italic),
+                 "color": _dump_color(ts.Color)}
+        mascara = _qi(ts, D.IMask)
+        if mascara is not None and mascara.MaskStyle == D.esriMSHalo:
+            clase["halo"] = {"tamano": round(mascara.MaskSize, 3),
+                             "color": _dump_color(
+                                 _qi(mascara.MaskSymbol, D.IFillSymbol).Color)}
+        ap = _qi(anotar, CA.IAnnotateLayerProperties)
+        if ap.AnnotationMinimumScale:
+            clase["escala_min"] = float(ap.AnnotationMinimumScale)
+        if ap.AnnotationMaximumScale:
+            clase["escala_max"] = float(ap.AnnotationMaximumScale)
+        clases.append(clase)
+    return clases
+
+
+def _wms_encendidas(capa, visible_arriba):
+    """Nombres WMS de las hojas que se VEN: visibles ellas y todos sus padres.
+    Una hoja encendida bajo un grupo apagado no pinta nada."""
+    _, CA = _mods()
+    visible = visible_arriba and bool(capa.Visible)
+    hoja = _qi(capa, CA.IWMSLayer)
+    if hoja is not None:
+        return [hoja.WMSLayerDescription.Name] if visible else []
+    compuesta = _qi(capa, CA.ICompositeLayer)
+    nombres = []
+    if compuesta is not None:
+        for i in range(compuesta.Count):
+            nombres.extend(_wms_encendidas(compuesta.Layer[i], visible))
+    return nombres
+
+
 def dump_lyr(ruta_lyr):
     """Abre un .lyr y devuelve un dict canonico de su simbologia."""
     _init_arcobjects()
@@ -292,6 +388,30 @@ def dump_lyr(ruta_lyr):
             resultado["escala_min"] = float(layer.MinimumScale)
         if layer.MaximumScale:
             resultado["escala_max"] = float(layer.MaximumScale)
+        if _qi(layer, CA.IWMSMapLayer) is not None:
+            from comtypes.client import GetModule
+            GetModule(_lib_path() + "esriGISClient.olb")
+            import comtypes.gen.esriGISClient as GC
+            # La URL, de la conexion guardada: IWMSMapLayer.WMSServiceDescription
+            # no se deja leer desde comtypes.
+            conexion = _qi(layer, CA.IDataLayer).DataSourceName
+            props = _qi(conexion, GC.IWMSConnectionName).ConnectionProperties
+            resultado["wms"] = {"url": props.GetProperty(u"URL"),
+                                "encendidas": _wms_encendidas(layer, True)}
+            return resultado
+        wmts = _qi(layer, CA.IWMTSLayer)
+        if wmts is not None:
+            from comtypes.client import GetModule
+            GetModule(_lib_path() + "esriGISClient.olb")
+            import comtypes.gen.esriGISClient as GC
+            props = _qi(wmts.DataSourceName,
+                        GC.IWMTSConnectionName).ConnectionProperties
+            resultado["wmts"] = {"url": props.GetProperty(u"URL"),
+                                 "capa": wmts.LayerName,
+                                 "matriz": wmts.TileMatrixSet,
+                                 "estilo": wmts.Style,
+                                 "formato": wmts.ImageFormat}
+            return resultado
         rl = _qi(layer, CA.IRasterLayer)
         if rl is not None:
             resultado["renderer"] = _dump_renderer_raster(rl.Renderer)
@@ -299,6 +419,8 @@ def dump_lyr(ruta_lyr):
         gfl = _qi(layer, CA.IGeoFeatureLayer)
         if gfl is not None:
             resultado["renderer"] = _dump_renderer(gfl.Renderer)
+        if gfl is not None and gfl.DisplayAnnotation:
+            resultado["etiquetas"] = _dump_etiquetas(gfl)
         fld = _qi(layer, CA.IFeatureLayerDefinition)
         if fld is not None and fld.DefinitionExpression:
             resultado["defquery"] = fld.DefinitionExpression
