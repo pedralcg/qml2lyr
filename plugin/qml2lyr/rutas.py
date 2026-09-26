@@ -56,6 +56,18 @@ def _ajuste(clave):
     return (valor or "").strip()
 
 
+def reglas_remap():
+    """Reglas de --remap de los ajustes (`qml2lyr/remap`): una "ORIGEN=DESTINO"
+    por linea; las vacias se ignoran. Las valida el motor."""
+    texto = QSettings().value("qml2lyr/remap", "") or ""
+    return [linea.strip() for linea in texto.splitlines() if linea.strip()]
+
+
+def plantilla_mxd():
+    """Plantilla del modo MXD (`qml2lyr/plantilla`); vacia = la del motor."""
+    return _ajuste("qml2lyr/plantilla") or None
+
+
 def resolver():
     """(python27, emisor) listos para usar. Lanza RutaNoValida si no hay."""
     py27 = _ajuste("qml2lyr/python27")

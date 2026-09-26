@@ -40,6 +40,23 @@ def tipos_capa():
         return [QgsMapLayer.VectorLayer, QgsMapLayer.RasterLayer]
 
 
+def boton_mensaje(nombre):
+    """QMessageBox.StandardButton.<nombre> (Qt6) / QMessageBox.<nombre> (Qt5).
+    nombre: Save, Ignore, Cancel..."""
+    from qgis.PyQt.QtWidgets import QMessageBox
+    return _scoped(QMessageBox, "StandardButton", nombre)
+
+
+def tarea_sin_flags():
+    """Flags vacias para una QgsTask no cancelable: QgsTask.Flags() en Qt5;
+    en Qt6 el tipo de flags puede no estar expuesto y vale el enum a 0."""
+    from qgis.core import QgsTask
+    flags = getattr(QgsTask, "Flags", None)
+    if flags is not None:
+        return flags()
+    return QgsTask.Flag(0)
+
+
 def botones_ok_cancel():
     """QDialogButtonBox.StandardButton.Ok|Cancel (Qt6) o sin scope (Qt5)."""
     from qgis.PyQt.QtWidgets import QDialogButtonBox

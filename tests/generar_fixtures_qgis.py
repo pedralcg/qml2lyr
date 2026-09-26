@@ -652,6 +652,28 @@ def qgz_proyecto_mxd():
     print("escrito", salida)
 
 
+def qml_wms_capa_viva():
+    """Capa WMS viva, como la ve el plugin: su .qml (`saveNamedStyle`, que no
+    lleva el origen) y su `layer.source()`, que el plugin pasa aparte."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    servidor = wms_local.arrancar()
+    try:
+        capa = QgsRasterLayer(
+            "crs=EPSG:25830&format=image/png&layers=masas&layers=textos&"
+            "styles&styles&url=" + wms_local.URL, "WMS viva", "wms")
+        if not capa.isValid():
+            sys.exit("capa WMS no valida: %s" % capa.error().summary())
+        capa.renderer().setOpacity(0.6)
+        _guardar_qml(capa, "wms_capa_viva.qml")
+        ruta = os.path.join(DIR_FIX, "qml", "wms_capa_viva.source.txt")
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write(capa.source())
+        print("escrito", ruta)
+    finally:
+        servidor.shutdown()
+
+
 # Nombre del fichero (sin extension) -> generador.
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
@@ -677,6 +699,7 @@ GENERADORES = {
     "batch_remap": qgz_batch_remap,
     "batch_wms": qgz_batch_wms,
     "proyecto_mxd": qgz_proyecto_mxd,
+    "wms_capa_viva": qml_wms_capa_viva,
 }
 
 

@@ -43,7 +43,8 @@ estilo por defecto.
 | **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
 | **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
-| **Servicios** (`--batch`) | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
+| **Servicios** | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
+| **Proyecto** | el `.qgz` entero a un `.mxd`: grupos, orden, visibilidad, SRC y extensión (plugin y `--mxd`) |
 
 Lo que **no** convierte (etiquetado por reglas, expresiones, propiedades
 definidas por datos, ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitaciones.md).

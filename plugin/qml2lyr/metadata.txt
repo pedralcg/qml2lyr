@@ -1,9 +1,9 @@
 [general]
 name=qml2lyr
 qgisMinimumVersion=3.22
-description=Guarda el estilo de la capa activa como .lyr de ArcMap 10.5 (direccion QGIS -> ArcMap).
-about=Convierte la simbologia de la capa activa (vectorial o raster) a un archivo .lyr de ArcMap 10.5. La escritura del .lyr la hace el motor ArcObjects a traves del Python 2.7 de ArcGIS por subproceso, asi que requiere QGIS Y ArcGIS Desktop 10.5 instalados en la misma maquina. Cubre la direccion QGIS->ArcMap, que SLYR no ofrece en su version gratuita.
-version=0.2.0
+description=Guarda el estilo de la capa activa como .lyr de ArcMap 10.5, o el proyecto entero como .mxd (direccion QGIS -> ArcMap).
+about=Convierte la simbologia de la capa activa (vectorial, raster, WMS o WMTS) a un archivo .lyr de ArcMap 10.5, o monta un .mxd con todo el proyecto (grupos, orden y visibilidad). La escritura del .lyr la hace el motor ArcObjects a traves del Python 2.7 de ArcGIS por subproceso, asi que requiere QGIS Y ArcGIS Desktop 10.5 instalados en la misma maquina. Cubre la direccion QGIS->ArcMap, que SLYR no ofrece en su version gratuita.
+version=0.3.0
 author=Pedro Alcoba Gomez
 email=pedro@pedralcg.dev
 tracker=https://github.com/pedralcg/qml2lyr/issues

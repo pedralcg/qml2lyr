@@ -1190,6 +1190,68 @@ def caso_modo_mxd(fallos):
            u"no sobrescribe un .mxd existente")
 
 
+def caso_args_json_plugin(fallos):
+    """(20) Las dos vias nuevas del plugin por --args-json: una capa WMS viva
+    (`servicio` = su `source()`, sin `dato`) y el proyecto entero a .mxd
+    (`modo: mxd`) con un nombre de salida que cp1252 no puede llevar (Ω), que
+    solo llega bien por el fichero de argumentos. Y los rechazos."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    fuente = open(os.path.join(DIR_QML, "wms_capa_viva.source.txt"),
+                  "rb").read().decode("utf-8").strip()
+    lyr = _salida(u"wms_capa_viva.lyr")
+    servidor = wms_local.arrancar()
+    try:
+        args = _escribir_args(u"args_wms.json", {
+            u"qml": os.path.join(DIR_QML, u"wms_capa_viva.qml"),
+            u"servicio": fuente, u"salida": lyr, u"nombre": u"Catastro Ω"})
+        rc, out, err = _lanzar([u"--args-json", args])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"capa WMS viva no convirtio: %r / %s"
+                          % (capa, err[:300]))
+        else:
+            volcado = lyr_dump.dump_lyr(lyr)
+            _igual(fallos, (volcado.get("nombre"),
+                            (volcado.get("wms") or {}).get("encendidas"),
+                            volcado.get("transparencia_pct")),
+                   (u"Catastro Ω", [u"textos", u"masas"], 40),
+                   u"WMS de la capa viva")
+    finally:
+        servidor.shutdown()
+
+    carpeta = os.path.join(DIR_OUT, u"mxd_args")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    mxd = os.path.join(carpeta, u"proyecto Ω.mxd")
+    args = _escribir_args(u"args_mxd.json", {
+        u"modo": u"mxd", u"qgz": QGZ_MXD, u"salida": mxd, u"remap": []})
+    rc, out, err = _lanzar([u"--args-json", args])
+    datos = _json_estricto(out, fallos) or {}
+    _igual(fallos, (rc, datos.get("ok"), datos.get("salida")), (0, True, mxd),
+           u"modo mxd por --args-json")
+    if not os.path.isfile(mxd):
+        fallos.append(u"no se escribio %s" % mxd)
+
+    for nombre, args, texto in (
+            (u"dato y servicio", {u"qml": u"x.qml", u"salida": u"x.lyr",
+                                  u"dato": u"a.shp", u"servicio": u"url=x"},
+             u"no las dos"),
+            (u"modo raro", {u"modo": u"pdf", u"qgz": u"x"}, u"desconocido"),
+            (u"mxd sin qgz", {u"modo": u"mxd", u"salida": u"x.mxd"},
+             u"qgz"),
+            (u"clave de otro modo", {u"modo": u"mxd", u"qgz": u"x.qgz",
+                                     u"salida": u"x.mxd", u"dato": u"a"},
+             u"dato")):
+        rc, out, err = _lanzar([u"--args-json",
+                                _escribir_args(u"args_malo.json", args)])
+        error = ((_json_estricto(out, fallos) or {}).get("error") or u"")
+        if rc == 0 or texto not in error:
+            fallos.append(u"%s: deberia rechazarse nombrando '%s' (rc %s, %r)"
+                          % (nombre, texto, rc, error))
+
+
 def caso_parser_sin_arcobjects(fallos):
     """(8) Lo que se puede comprobar sin ArcObjects: campos unicode, mensajes
     neutros y resolucion de rutas multicapa."""
@@ -1279,6 +1341,7 @@ CASOS = [
     ("batch_remap", caso_batch_remap),
     ("batch_wms", caso_batch_wms),
     ("modo_mxd", caso_modo_mxd),
+    ("args_json_plugin", caso_args_json_plugin),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
 

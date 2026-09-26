@@ -72,8 +72,28 @@ capas del `.gpkg` (así su origen lleva `|layername=…`, que es lo que arcpy
 necesita). Si se añadió el `.gpkg` a secas, el plugin lo dice y explica cómo
 arreglarlo.
 
-Capas de memoria, PostGIS, WMS/WFS y otros contenedores multicapa (`.kml`,
+**WMS y WMTS**: también se convierten, a un `.lyr` de servicio. En un WMS se
+encienden solo las subcapas que la capa de QGIS pide; en un WMTS viajan la capa,
+la matriz de teselas, el estilo y el formato. Convertir necesita red (ArcGIS lee
+el `GetCapabilities` del servicio). Las teselas XYZ no: ArcMap 10.5 no las tiene.
+
+Capas de memoria, PostGIS, WFS y otros contenedores multicapa (`.kml`,
 `.sqlite`…) no se convierten: no tienen un dato que arcpy pueda abrir por ruta.
+
+### Exportar el proyecto entero a un .mxd
+
+**Complementos → qml2lyr → Exportar proyecto a .mxd…** monta un `.mxd` con las
+mismas capas, grupos, orden y visibilidad que el panel de capas, con el SRC y la
+extensión del proyecto y rutas relativas. Parte del proyecto **guardado en
+disco**: si hay cambios sin guardar, pregunta. Corre en segundo plano (un
+proyecto de 26 capas tarda alrededor de un minuto) y al terminar enseña qué capas
+no entraron y por qué, y los avisos. Los `.lyr` de cada capa quedan junto al
+`.mxd`, en `<nombre>_lyr/`. **No sobrescribe** un `.mxd` que ya exista.
+
+En los ajustes se pueden fijar la **plantilla** `.mxd` de partida (vacío = ISO A3
+horizontal de ArcGIS) y las **unidades que en esta máquina se llaman de otra
+forma**, una por línea: `Z:=L:\Mi unidad\Carto` lee el dato en `L:` y deja el
+`.mxd` apuntando a `Z:`.
 
 ## Estructura
 
@@ -87,7 +107,8 @@ plugin/
     qml2lyr_plugin.py     ← clase principal (acción, flujo, reportes)
     emisor_runner.py      ← puente subproceso py3 → py2.7 + parseo del JSON
     rutas.py              ← Python de ArcGIS (registro) y motor incluido; ajustes como override
-    settings_dialog.py    ← diálogo de rutas opcionales (QSettings)
+    settings_dialog.py    ← diálogo de ajustes: rutas, plantilla y remap (QSettings)
+    informe.py            ← textos del informe del .mxd, sin Qt (lo prueba el CI)
     motor/                ← NO versionado: src/*.py, lo copian deploy.ps1 y empaquetar.py
     compat_qt.py          ← enums de Qt/QGIS con y sin scope (Qt5 / Qt6)
     icon.svg
@@ -101,6 +122,11 @@ plugin/
   `Qgis.MessageLevel.Info`) y PyQt5 acepta las dos. `compat_qt` prueba primero
   la de scope y cae a la legada, así que el mismo código vale en QGIS 3.44 (Qt5,
   donde está el QA) y en QGIS 4 (Qt6). No usar enums sin scope en código nuevo.
-- Config en `QSettings` bajo la clave `qml2lyr/*` (nunca hardcodear rutas).
+- Config en `QSettings` bajo la clave `qml2lyr/*` (nunca hardcodear rutas):
+  `python27`, `emisor`, `plantilla`, `remap`.
+- El modo MXD corre en una `QgsTask`: la tarea guarda una referencia viva en el
+  plugin (`self._tarea`) y habla con la interfaz solo desde `finished()`, que
+  va en el hilo principal. No es cancelable: el subproceso de ArcObjects no se
+  puede cortar a medias.
 - El contrato del subproceso está en `src/emisor.py` (`__main__`) y en el
   `CLAUDE.md` del repo (sección «Interfaz de subproceso»).
