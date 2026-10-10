@@ -330,6 +330,36 @@ def caso_opacidad_capa(fallos):
            u"transparencia del .lyr")
 
 
+def caso_opacidad_simbolo(fallos):
+    """(2bis) Opacidad de SIMBOLO igual en todas las clases -> transparencia de
+    capa (por la de capa que ya hubiera); distinta entre clases -> opaco y
+    aviso. Y que ArcMap pinte de verdad el color que pinta QGIS: un relleno
+    al 50 % sobre blanco."""
+    for qml, esperada in ((u"opacidad_simbolo_unico.qml", 80),
+                          (u"opacidad_categorias_igual.qml", 50),
+                          (u"opacidad_categorias_mixta.qml", None)):
+        lyr = _salida(qml.replace(u".qml", u".lyr"))
+        rc, out, err = _lanzar([os.path.join(DIR_QML, qml), SHP_POLIGONOS, lyr])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"%s no convirtio: %r" % (qml, capa))
+            continue
+        _igual(fallos, lyr_dump.dump_lyr(lyr).get("transparencia_pct"),
+               esperada, u"transparencia de %s" % qml)
+    # Render: la clase A (#e41a1c) al 50 % sobre blanco -> (241, 140, 141).
+    # Es la mezcla que hace QGIS y la que tiene que hacer la capa en ArcMap.
+    mezcla = tuple(int(round(255 - 0.5 * (255 - c))) for c in (228, 26, 28))
+    pixeles = _pixeles_de_color(_salida(u"opacidad_categorias_igual.lyr"),
+                                mezcla, _salida(u"opacidad_render.png"),
+                                tolerancia=6)
+    opaco = _pixeles_de_color(_salida(u"opacidad_categorias_igual.lyr"),
+                              (228, 26, 28), _salida(u"opacidad_render2.png"),
+                              tolerancia=6)
+    if pixeles < 1000 or opaco > 0:
+        fallos.append(u"el relleno no sale al 50 %%: %d px de la mezcla "
+                      u"%r, %d px del color opaco" % (pixeles, mezcla, opaco))
+
+
 def caso_tilde_posicional(fallos):
     """(3) Nombre y ruta con tilde por el modo posicional: JSON valido y
     exit 0. Antes reventaba con UnicodeDecodeError tras escribir el .lyr."""
@@ -680,9 +710,9 @@ PLANTILLA_MXD = (u"C:\\Program Files (x86)\\ArcGIS\\Desktop10.5\\MapTemplates"
                  u"\\Standard Page Sizes\\ISO (A) Page Sizes\\ISO A3 Landscape.mxd")
 
 
-def _pixeles_de_color(ruta_lyr, rgb, png):
-    """Cuantos pixeles de color `rgb` (+-40 por canal) salen al dibujar el
-    .lyr solo en un mapa estandar, encuadrado en su dato."""
+def _pixeles_de_color(ruta_lyr, rgb, png, tolerancia=40):
+    """Cuantos pixeles de color `rgb` (+-`tolerancia` por canal) salen al
+    dibujar el .lyr solo en un mapa estandar, encuadrado en su dato."""
     import arcpy
     mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
     df = arcpy.mapping.ListDataFrames(mxd)[0]
@@ -695,8 +725,9 @@ def _pixeles_de_color(ruta_lyr, rgb, png):
                               df_export_height=400)
     del mxd
     a = arcpy.RasterToNumPyArray(png).astype("int32")
-    cerca = ((abs(a[0] - rgb[0]) < 40) & (abs(a[1] - rgb[1]) < 40)
-             & (abs(a[2] - rgb[2]) < 40))
+    cerca = ((abs(a[0] - rgb[0]) < tolerancia)
+             & (abs(a[1] - rgb[1]) < tolerancia)
+             & (abs(a[2] - rgb[2]) < tolerancia))
     return int(cerca.sum())
 
 
@@ -1321,6 +1352,7 @@ CASOS = [
     ("defquery_args_json", caso_defquery_args_json),
     ("defquery_posicional", caso_defquery_posicional),
     ("opacidad_capa", caso_opacidad_capa),
+    ("opacidad_simbolo", caso_opacidad_simbolo),
     ("tilde_posicional", caso_tilde_posicional),
     ("tilde_args_json", caso_tilde_args_json),
     ("raster_alfa0", caso_raster_alfa0),

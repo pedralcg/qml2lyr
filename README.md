@@ -39,7 +39,7 @@ estilo por defecto.
 | **Relleno** | sólido, hueco, tramado (6 patrones), multicapa, relleno con imagen |
 | **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot` |
 | **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
-| **Capa** | definition query, opacidad, visibilidad por escala |
+| **Capa** | definition query, opacidad de capa (y la de símbolo cuando es la misma en todas las clases), visibilidad por escala |
 | **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
 | **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |

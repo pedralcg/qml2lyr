@@ -65,6 +65,29 @@ def test_opacidad(fallos):
            u"opacidad de capa")
 
 
+def test_opacidad_simbolo(fallos):
+    """QGIS 3.44.12: la opacidad de SIMBOLO igual en todas las clases pasa a
+    la de capa (multiplicada por la que hubiera); distinta, se avisa."""
+    capa = _qml("opacidad_simbolo_unico.qml")[0]
+    _cerca(fallos, capa.opacidad, 0.2, u"0,4 de simbolo x 0,5 de capa")
+    if not any(u"transparencia de CAPA (80%)" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la conversion: %r" % capa.avisos)
+
+    capa = _qml("opacidad_categorias_igual.qml")[0]
+    _cerca(fallos, capa.opacidad, 0.5, u"categorias las dos a 0,5")
+
+    capa = _qml("opacidad_categorias_mixta.qml")[0]
+    _igual(fallos, capa.opacidad, 1.0, u"opacidades distintas: capa opaca")
+    if not any(u"opacidades distintas" in a and u"'Tipo A' 0.4" in a
+               for a in capa.avisos):
+        fallos.append(u"no avisa de las opacidades distintas: %r"
+                      % capa.avisos)
+    # La redaccion vieja se leia como falsa (2026-09-21): que no vuelva.
+    for nombre in ("opacidad_simbolo_unico.qml", "opacidad_categorias_mixta.qml"):
+        if any(u"lo pinta opaco" in a for a in _qml(nombre)[0].avisos):
+            fallos.append(u"%s: vuelve la redaccion vieja del aviso" % nombre)
+
+
 def test_angulo_escalas(fallos):
     """QGIS 3.44.12: el modelo guarda el angulo de QGIS (horario); el cambio
     de sentido lo hace el emisor, no el parser."""

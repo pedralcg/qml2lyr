@@ -81,6 +81,41 @@ def qml_poligono_opacidad_50():
     _guardar_qml(capa, "poligono_opacidad_50.qml")
 
 
+def _con_opacidad(simbolo, opacidad):
+    simbolo.setOpacity(opacidad)
+    return simbolo
+
+
+def qml_opacidad_simbolo():
+    """Opacidad de SIMBOLO (`alpha` del <symbol>), no de capa. Si es la misma
+    en todas las clases se emite como transparencia de capa (multiplicada por
+    la de capa que ya hubiera); si difiere, se avisa. Tres casos:
+
+    - simbolo unico a 0,4 con la capa a 0,5 -> transparencia 1 - 0,2 = 80 %
+    - categorias A y B las dos a 0,5          -> transparencia 50 %
+    - categorias A a 0,4 y B opaca            -> sin transparencia, aviso
+    """
+    capa = _vectorial("poligonos.shp", "Opacidad de simbolo")
+    capa.renderer().setSymbol(_con_opacidad(_relleno("#1e78c8", 0.26), 0.4))
+    capa.setOpacity(0.5)
+    _guardar_qml(capa, "opacidad_simbolo_unico.qml")
+
+    capa = _vectorial("poligonos.shp", "Opacidad igual")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _con_opacidad(_relleno("#e41a1c", 0.26), 0.5),
+                            "Tipo A"),
+        QgsRendererCategory("B", _con_opacidad(_relleno("#377eb8", 0.26), 0.5),
+                            "Tipo B")]))
+    _guardar_qml(capa, "opacidad_categorias_igual.qml")
+
+    capa = _vectorial("poligonos.shp", "Opacidad mixta")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _con_opacidad(_relleno("#e41a1c", 0.26), 0.4),
+                            "Tipo A"),
+        QgsRendererCategory("B", _relleno("#377eb8", 0.26), "Tipo B")]))
+    _guardar_qml(capa, "opacidad_categorias_mixta.qml")
+
+
 def qml_linea_dash_dot():
     """Trazo `dash dot`: QGIS escribe el estilo con ESPACIOS. Ancho 0,4 mm
     (1,13 pt), por debajo del umbral en el que ArcMap dibuja el patron
@@ -678,6 +713,7 @@ def qml_wms_capa_viva():
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
     "poligono_opacidad_50": qml_poligono_opacidad_50,
+    "opacidad_simbolo": qml_opacidad_simbolo,
     "linea_dash_dot": qml_linea_dash_dot,
     "raster_paleta_alfa0": qml_raster_paleta_alfa0,
     "punto_angulo_escalas": qml_punto_angulo_escalas,

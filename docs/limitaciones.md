@@ -115,6 +115,18 @@ símbolo más fiel posible y **avisa** de la pérdida:
   distintas**. Lo que se pierde no es "algo de transparencia", es la
   **diferencia entre clases**: dos clases con alfa 90/255 y 50/255 acaban
   igual de opacas bajo la misma transparencia de capa.
+- **Opacidad de SÍMBOLO** (el control de opacidad del símbolo en QGIS, `alpha`
+  del `<symbol>`): desde el 2026-10-10, si **todos** los símbolos que se dibujan
+  tienen la misma (siempre en símbolo único y en cada `.lyr` de regla; en
+  categorizado y graduado si coinciden), **se emite como transparencia de
+  capa**, multiplicada por la de capa que ya hubiera: transparencia =
+  1 − opacidad_capa × opacidad_símbolo. Medido por render: un relleno al 50 %
+  sale del mismo color en los dos programas (±1 nivel). La única diferencia,
+  que se avisa, es donde se **solapan entidades** de la capa: QGIS acumula el
+  color y ArcMap no. Si la opacidad **difiere entre clases**, no hay
+  transparencia de capa que lo reproduzca: las clases salen opacas y se avisa
+  nombrando la de cada una. La opacidad de un **sub-símbolo** (la raya de un
+  tramado, el marcador de un relleno de puntos) tampoco viaja y se avisa.
 - **Offset del tramado** (`LinePatternFill` con `offset` ≠ 0): `ILineFillSymbol`
   no desplaza el patrón; se dibuja sin ese desplazamiento. Se avisa desde el
   2026-09-21 (antes se perdía mudo; hay casos reales con `offset=1.5`).

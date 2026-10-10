@@ -274,6 +274,11 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   `fallo en <paso>: COMError: ...`.
 - **Ráster, opacidad**: no está en `<layerOpacity>` sino en el atributo `opacity`
   del `<rasterrenderer>`.
+- **Opacidad de SÍMBOLO** (`alpha` del `<symbol>`) ≠ alfa de color ≠ opacidad
+  de capa. El parser la guarda en `simbolo.opacidad` y `_aplicar_cabecera` la
+  pasa a `capa.opacidad` (multiplicando) si es la MISMA en todas las clases
+  que se dibujan (`_opacidad_de_simbolos`); si no, aviso. El emisor no la lee.
+  La de un sub-símbolo (`anidado=True`) solo se avisa.
 - **Ráster, valores ocultos**: `<rasterTransparency>` cuelga DENTRO de
   `<rasterrenderer>` y oculta valores sueltos al margen de la paleta. ArcMap no
   tiene transparencia por clase: el 100% se reproduce con símbolo nulo y lo demás

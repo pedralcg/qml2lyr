@@ -363,7 +363,7 @@ def _tramado(layer_elem, avisos):
     sub = layer_elem.find("symbol")
     if sub is None:
         raise SimbologiaNoSoportada(u"LinePatternFill sin sub-simbolo de linea")
-    linea = _simbolo_desde_symbol(sub, avisos)
+    linea = _simbolo_desde_symbol(sub, avisos, anidado=True)
     if not isinstance(linea, SimboloLinea):
         raise SimbologiaNoSoportada(
             u"LinePatternFill con sub-simbolo %s" % type(linea).__name__)
@@ -473,16 +473,32 @@ def _simbolo_fill(layers, avisos):
     return SimboloMultiCapa([_capa_de_relleno(l, avisos) for l in layers])
 
 
-def _simbolo_desde_symbol(symbol_elem, avisos):
+def _simbolo_desde_symbol(symbol_elem, avisos, anidado=False):
+    """<symbol> -> simbolo del modelo, con su opacidad (`alpha`) en
+    `simbolo.opacidad`.
+
+    La opacidad de un simbolo de CLASE se resuelve despues, al ver todas las
+    clases de la capa (`_opacidad_de_simbolos`). La de un sub-simbolo
+    (`anidado`: la raya de un tramado, el marcador de un relleno de puntos)
+    no tiene adonde ir en ArcMap y se avisa aqui.
+    """
+    opacidad = float(symbol_elem.get("alpha") or 1.0)
+    if anidado and abs(opacidad - 1.0) > 1e-6:
+        avisos.append(
+            u"sub-simbolo %s con opacidad %g dentro de otro simbolo: ArcMap "
+            u"no tiene opacidad por simbolo y lo pinta OPACO"
+            % (symbol_elem.get("type"), opacidad))
+    simbolo = _simbolo_sin_opacidad(symbol_elem, avisos)
+    if not anidado:
+        simbolo.opacidad = opacidad
+    return simbolo
+
+
+def _simbolo_sin_opacidad(symbol_elem, avisos):
     tipo = symbol_elem.get("type")
     layers = symbol_elem.findall("layer")
     if not layers:
         raise SimbologiaNoSoportada(u"symbol type='%s' sin symbol-layers" % tipo)
-
-    alpha = symbol_elem.get("alpha")
-    if alpha is not None and abs(float(alpha) - 1.0) > 1e-6:
-        avisos.append(u"simbolo con opacidad %s en QGIS: ArcMap lo pinta opaco"
-                      % alpha)
 
     # QGIS no dibuja los symbol-layers desactivados; el .lyr tampoco debe.
     apagados = [l for l in layers if l.get("enabled") == "0"]
@@ -1663,10 +1679,61 @@ def _capas_desde_estilo(elem, nombre, avisos):
                        avisos=avisos)]
 
 
+def _simbolos_de_clase(renderer):
+    """Los simbolos que el renderer vectorial dibuja -> [(etiqueta, simbolo)].
+    Vacio en raster y servicios, que no tienen simbolos de QGIS."""
+    if isinstance(renderer, RendererSimple):
+        return [(renderer.label, renderer.simbolo)]
+    if isinstance(renderer, RendererValoresUnicos):
+        pares = [(c.label or c.valor, c.simbolo) for c in renderer.clases]
+        if renderer.default_simbolo is not None:
+            pares.append((renderer.default_label or u"resto",
+                          renderer.default_simbolo))
+        return pares
+    if isinstance(renderer, RendererGraduado):
+        return [(r.label, r.simbolo) for r in renderer.rangos]
+    return []
+
+
+def _opacidad_de_simbolos(capa):
+    """Opacidad de SIMBOLO (`alpha` del <symbol>) -> transparencia de CAPA.
+
+    ArcMap no tiene opacidad por simbolo, pero si TODOS los simbolos que se
+    dibujan llevan la misma `o`, pintar cada uno a `o` es lo mismo que pintar
+    la capa a `o` (salvo donde se solapan entidades: ahi QGIS acumula color y
+    ArcMap no). Se multiplica por la opacidad de capa que ya hubiera:
+    transparencia = 1 - opacidad_capa * o.
+
+    Si difieren entre clases no hay transparencia de capa que lo reproduzca:
+    los simbolos salen opacos y se avisa. Hasta 2026-10-10 se avisaba
+    siempre, con la redaccion "ArcMap lo pinta opaco", que se leia como falsa
+    al ver la capa translucida por su transparencia de capa.
+    """
+    pares = _simbolos_de_clase(capa.renderer)
+    opacidades = sorted(set(round(s.opacidad, 6) for _, s in pares))
+    if not opacidades or opacidades == [1.0]:
+        return
+    if len(opacidades) == 1:
+        capa.opacidad *= opacidades[0]
+        capa.avisos.append(
+            u"opacidad de simbolo %g, la misma en todas las clases: se emite "
+            u"como transparencia de CAPA (%d%%). Se ve igual salvo donde se "
+            u"solapan entidades: QGIS acumula el color y ArcMap no"
+            % (opacidades[0], int(round((1.0 - capa.opacidad) * 100))))
+        return
+    capa.avisos.append(
+        u"simbolos con opacidades distintas segun la clase (%s): ArcMap no "
+        u"tiene opacidad por simbolo, asi que todas las clases salen OPACAS. "
+        u"La transparencia de CAPA si viaja, pero es una sola para todas"
+        % u", ".join(u"'%s' %g" % (etiqueta or u"?", s.opacidad)
+                     for etiqueta, s in pares))
+
+
 def _aplicar_cabecera(capas, cabecera, datasource=None, defquery=None):
     """Pega los atributos de capa a cada CapaEstilo (tambien a las de reglas)."""
     for capa in capas:
         capa.opacidad = cabecera["opacidad"]
+        _opacidad_de_simbolos(capa)
         capa.escala_min = cabecera["escala_min"]
         capa.escala_max = cabecera["escala_max"]
         capa.etiquetado = cabecera.get("etiquetado")
