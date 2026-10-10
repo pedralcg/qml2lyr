@@ -116,6 +116,40 @@ def qml_opacidad_simbolo():
     _guardar_qml(capa, "opacidad_categorias_mixta.qml")
 
 
+def _relleno_puntos(color, tam, dx, dy, disp_x=0.0, disp_y=0.0, off_x=0.0,
+                    con_borde=True):
+    from qgis.core import QgsPointPatternFillSymbolLayer
+    marcador = QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": color, "size": str(tam),
+         "outline_color": "#000000", "outline_width": "0.2"})
+    ppf = QgsPointPatternFillSymbolLayer()
+    ppf.setSubSymbol(marcador)
+    ppf.setDistanceX(dx)
+    ppf.setDistanceY(dy)
+    ppf.setDisplacementX(disp_x)
+    ppf.setDisplacementY(disp_y)
+    ppf.setOffsetX(off_x)
+    capas = [ppf]
+    if con_borde:
+        capas.append(QgsSimpleLineSymbolLayer(QColor("#33a02c"), 0.26))
+    return QgsFillSymbol(capas)
+
+
+def qml_relleno_puntos():
+    """PointPatternFill, imitando los dos casos reales que se perdian:
+    A con las filas alternas desplazadas media separacion y borde (un
+    SimpleLine detras, como 'Montes'), B con filas Y columnas desplazadas y
+    un offset del patron (como 'Red de Corredores')."""
+    capa = _vectorial("poligonos.shp", "Relleno de puntos")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _relleno_puntos(
+            "#33a02c", 1.2, 2.4, 2.4, disp_x=1.2), "Filas desplazadas"),
+        QgsRendererCategory("B", _relleno_puntos(
+            "#1f78b4", 0.6, 2.4, 2.4, disp_x=3, disp_y=1.2, off_x=5.4,
+            con_borde=False), "Filas y columnas")]))
+    _guardar_qml(capa, "relleno_puntos.qml")
+
+
 def qml_linea_dash_dot():
     """Trazo `dash dot`: QGIS escribe el estilo con ESPACIOS. Ancho 0,4 mm
     (1,13 pt), por debajo del umbral en el que ArcMap dibuja el patron
@@ -714,6 +748,7 @@ GENERADORES = {
     "poligono_simple": qml_poligono_simple,
     "poligono_opacidad_50": qml_poligono_opacidad_50,
     "opacidad_simbolo": qml_opacidad_simbolo,
+    "relleno_puntos": qml_relleno_puntos,
     "linea_dash_dot": qml_linea_dash_dot,
     "raster_paleta_alfa0": qml_raster_paleta_alfa0,
     "punto_angulo_escalas": qml_punto_angulo_escalas,

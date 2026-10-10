@@ -127,6 +127,18 @@ símbolo más fiel posible y **avisa** de la pérdida:
   transparencia de capa que lo reproduzca: las clases salen opacas y se avisa
   nombrando la de cada una. La opacidad de un **sub-símbolo** (la raya de un
   tramado, el marcador de un relleno de puntos) tampoco viaja y se avisa.
+- **Relleno de puntos** (`PointPatternFill`, desde el 2026-10-10) → rejilla de
+  `MarkerFillSymbol`. Viajan el marcador, la separación y el desplazamiento de
+  filas y columnas alternas (`displacement_x/y`). Como una rejilla de ArcMap
+  solo es una red rectangular, con desplazamiento se emiten **2 rejillas**
+  superpuestas (filas o columnas) o **4** (las dos), y se avisa. La red de
+  puntos se midió por render contra QGIS 3.44 en cinco configuraciones (centros
+  de cada marcador, vectores a los vecinos): **idéntica** en separación,
+  escalonado y tamaño de marcador. Lo que **no** viaja: el **origen** del
+  patrón (QGIS lo ancla a cada entidad y ArcMap al mapa, así que los puntos
+  pueden salir corridos; el dibujo es el mismo) y por tanto tampoco el
+  `offset`; la **desviación aleatoria**, el **giro** del patrón y los modos de
+  **recorte** distintos del de por defecto. Todos se avisan.
 - **Offset del tramado** (`LinePatternFill` con `offset` ≠ 0): `ILineFillSymbol`
   no desplaza el patrón; se dibuja sin ese desplazamiento. Se avisa desde el
   2026-09-21 (antes se perdía mudo; hay casos reales con `offset=1.5`).

@@ -23,6 +23,7 @@ import re as _re
 
 from modelo import (SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
+                    SimboloRellenoMarcadores,
                     RendererSimple, RendererValoresUnicos, RendererGraduado,
                     RendererRasterValoresUnicos, RendererRasterCortes,
                     RendererRasterEstirado, RendererRasterRGB,
@@ -251,6 +252,18 @@ def _simbolo(simbolo):
 
     if isinstance(simbolo, SimboloImagen):
         return _qi_exig(_simbolo_imagen(simbolo), D.ISymbol)
+
+    if isinstance(simbolo, SimboloRellenoMarcadores):
+        mf = _nobj(D.MarkerFillSymbol, D.IMarkerFillSymbol)
+        mf.Style = D.esriMFSGrid
+        mf.MarkerSymbol = _qi_exig(_simbolo(simbolo.marcador), D.IMarkerSymbol)
+        propiedades = _qi_exig(mf, D.IFillProperties)
+        propiedades.XSeparation = float(simbolo.sep_x_pt)
+        propiedades.YSeparation = float(simbolo.sep_y_pt)
+        propiedades.XOffset = float(simbolo.desfase_x_pt)
+        propiedades.YOffset = float(simbolo.desfase_y_pt)
+        _qi_exig(mf, D.IFillSymbol).Outline = _contorno(simbolo.contorno)
+        return _qi_exig(mf, D.ISymbol)
 
     if isinstance(simbolo, SimboloMarcador):
         ms = _nobj(D.SimpleMarkerSymbol, D.ISimpleMarkerSymbol)

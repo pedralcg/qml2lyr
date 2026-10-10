@@ -138,7 +138,8 @@ contaminan). Tres modos:
 la del `.qgz` — las dos por `parser_qgis.combinar_defquery`, que tolera que
 cualquiera de las dos falte.
 
-Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / multicapa / línea
+Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / multicapa / relleno
+de puntos (`PointPatternFill`) / línea
 (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) / marcador (5 formas simples
 + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por escala.
 Categorizado por concatenación de 2-3 campos (`concat`/`||`, con o sin
@@ -329,6 +330,14 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   pero el del clasificado es **`ClassField`**.
 - **Multicapa**: `IMultiLayerFillSymbol.AddLayer` **inserta en el índice 0**: hay
   que añadir en el orden del `.qgz` y el volcado sale invertido respecto al XML.
+- **`PointPatternFill`** (medido 2026-10-10, centros de marcador en un render a
+  96 dpi): el punto (i, j) de QGIS cae en `x = i·dx + disp_x·[j impar]`,
+  `y = j·dy + disp_y·[i impar]`. Con desplazamiento no cabe en UNA rejilla de
+  `MarkerFillSymbol`: se parte por paridad en 2 o 4 rejillas
+  (`parser_qgis._rejillas_de_puntos`). El **signo** de los ejes no importa (la
+  red con ±d es la misma trasladada), así que no hace falta saber hacia dónde
+  crece el `YOffset` de ArcMap. Una symbol-layer que sale multicapa se
+  **aplana** dentro del multicapa del símbolo (`_simbolo_fill`).
 - **Color vacío** (`outline_color=""`, estilos migrados de QGIS 2.x): lo que Qt
   pinte con eso no se deduce del XML → se avisa y se salta, NO se inventa un negro.
 - Encoding: Python 2.7 + acentos → literales `u""` siempre.

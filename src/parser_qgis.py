@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 
 from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
+                    SimboloRellenoMarcadores,
                     RendererSimple,
                     ClaseValor, RendererValoresUnicos, ClaseRango,
                     RendererGraduado, RendererRasterValoresUnicos,
@@ -432,6 +433,90 @@ def _relleno_imagen(layer_elem, avisos):
                          contorno=Contorno(style="no"))
 
 
+def _rejillas_de_puntos(dx, dy, disp_x, disp_y):
+    """Patron de QGIS -> rejillas (sep_x, sep_y, desfase_x, desfase_y) de
+    ArcMap cuya union es el mismo conjunto de puntos.
+
+    Medido en QGIS 3.44.12 (2026-10-10, centros de marcador sobre un render
+    a 96 dpi): el punto (i, j) cae en x = i*dx + disp_x*[j impar],
+    y = j*dy + disp_y*[i impar]. Una rejilla de ArcMap solo es una red
+    rectangular, asi que con desplazamiento se parte por paridad de fila
+    y/o columna: 2 rejillas con un desplazamiento, 4 con los dos.
+
+    El SIGNO de cada eje no importa: la red con +d y con -d es la misma
+    trasladada (cambiar j por j+1), y lo mismo al reflejarla. Por eso el
+    sentido de los ejes de ArcMap no puede estropear el patron, solo su fase.
+    """
+    hay_x, hay_y = abs(disp_x) > 1e-9, abs(disp_y) > 1e-9
+    if not hay_x and not hay_y:
+        return [(dx, dy, 0.0, 0.0)]
+    if not hay_y:
+        return [(dx, 2 * dy, 0.0, 0.0), (dx, 2 * dy, disp_x % dx, dy)]
+    if not hay_x:
+        return [(2 * dx, dy, 0.0, 0.0), (2 * dx, dy, dx, disp_y % dy)]
+    return [(2 * dx, 2 * dy, (a * dx + b * disp_x) % (2 * dx),
+             (b * dy + a * disp_y) % (2 * dy))
+            for a in (0, 1) for b in (0, 1)]
+
+
+def _relleno_puntos(layer_elem, avisos):
+    """symbol-layer PointPatternFill -> rejilla(s) de MarkerFillSymbol.
+
+    Viajan el marcador, la separacion y el desplazamiento de filas y
+    columnas (exacto, ver `_rejillas_de_puntos`). No viajan, y se avisa: el
+    desplazamiento aleatorio, el giro del patron y los modos de recorte que no
+    son el de por defecto. El ORIGEN del patron tampoco: QGIS lo ancla a cada
+    entidad y ArcMap al mapa, asi que los puntos pueden salir corridos (el
+    dibujo es el mismo).
+    """
+    opts = _opciones(layer_elem)
+    sub = layer_elem.find("symbol")
+    if sub is None:
+        raise SimbologiaNoSoportada(u"PointPatternFill sin sub-simbolo")
+    marcador = _simbolo_desde_symbol(sub, avisos, anidado=True)
+    if not isinstance(marcador, (SimboloMarcador, SimboloMarcadorCaracter)):
+        raise SimbologiaNoSoportada(
+            u"PointPatternFill con sub-simbolo %s" % type(marcador).__name__)
+
+    def medida(clave, defecto):
+        return _a_puntos(opts.get(clave) or defecto,
+                         opts.get(clave + "_unit") or "MM", clave)
+    dx, dy = medida("distance_x", "3"), medida("distance_y", "3")
+    if dx <= 0 or dy <= 0:
+        raise SimbologiaNoSoportada(
+            u"PointPatternFill con distancia no positiva (%g x %g pt)"
+            % (dx, dy))
+    rejillas = _rejillas_de_puntos(dx, dy, medida("displacement_x", "0"),
+                                   medida("displacement_y", "0"))
+
+    for clave in ("random_deviation_x", "random_deviation_y"):
+        if _es_offset_no_nulo(opts.get(clave)):
+            avisos.append(u"relleno de puntos con desviacion aleatoria (%s=%s): "
+                          u"ArcMap pone los puntos en rejilla exacta"
+                          % (clave, opts.get(clave)))
+    if _es_offset_no_nulo(opts.get("angle")):
+        avisos.append(u"relleno de puntos girado %s grados: el patron sale sin "
+                      u"girar" % opts.get("angle"))
+    if (opts.get("clip_mode") or u"shape") != u"shape":
+        avisos.append(u"relleno de puntos con recorte '%s': ArcMap recorta los "
+                      u"marcadores por el borde del poligono"
+                      % opts.get("clip_mode"))
+    if _es_offset_no_nulo(opts.get("offset_x")) or \
+            _es_offset_no_nulo(opts.get("offset_y")):
+        avisos.append(u"relleno de puntos con offset %s, %s: no se traslada "
+                      u"(ArcMap ancla el patron al mapa y QGIS a cada "
+                      u"entidad); el dibujo es el mismo, corrido"
+                      % (opts.get("offset_x"), opts.get("offset_y")))
+    if len(rejillas) > 1:
+        avisos.append(u"relleno de puntos con filas o columnas desplazadas: se "
+                      u"emite como %d rejillas superpuestas de ArcMap"
+                      % len(rejillas))
+
+    grids = [SimboloRellenoMarcadores(marcador, sx, sy, ox, oy)
+             for sx, sy, ox, oy in rejillas]
+    return grids[0] if len(grids) == 1 else SimboloMultiCapa(grids)
+
+
 def _capa_de_relleno(layer_elem, avisos):
     """UNA symbol-layer de un <symbol type="fill"> -> simbolo del modelo.
 
@@ -441,6 +526,7 @@ def _capa_de_relleno(layer_elem, avisos):
                             (asi dibuja QGIS un poligono "solo borde")
       - LinePatternFill  -> tramado
       - RasterFill       -> relleno con imagen en mosaico
+      - PointPatternFill -> rejilla(s) de marcadores
     """
     clase = layer_elem.get("class")
 
@@ -458,6 +544,9 @@ def _capa_de_relleno(layer_elem, avisos):
     if clase == "RasterFill":
         return _relleno_imagen(layer_elem, avisos)
 
+    if clase == "PointPatternFill":
+        return _relleno_puntos(layer_elem, avisos)
+
     raise SimbologiaNoSoportada(u"symbol-layer class='%s' en un fill" % clase)
 
 
@@ -467,10 +556,21 @@ def _simbolo_fill(layers, avisos):
     Varias symbol-layers superpuestas (relleno hueco + trama = Red Natura, ENP)
     se traducen a un simbolo multicapa; ArcMap lo representa con
     MultiLayerFillSymbol. Una sola capa se emite plana, sin envoltorio.
+
+    Una symbol-layer que ya sale multicapa (el relleno de puntos con filas
+    desplazadas son varias rejillas) se APLANA en el multicapa del simbolo:
+    sus capas van seguidas, en el sitio que ocupaba ella en el orden de QGIS.
     """
     if len(layers) == 1:
         return _capa_de_relleno(layers[0], avisos)
-    return SimboloMultiCapa([_capa_de_relleno(l, avisos) for l in layers])
+    capas = []
+    for l in layers:
+        simbolo = _capa_de_relleno(l, avisos)
+        if isinstance(simbolo, SimboloMultiCapa):
+            capas.extend(simbolo.capas)
+        else:
+            capas.append(simbolo)
+    return SimboloMultiCapa(capas)
 
 
 def _simbolo_desde_symbol(symbol_elem, avisos, anidado=False):

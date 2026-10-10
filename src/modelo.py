@@ -130,6 +130,26 @@ class SimboloImagen(_Simbolo):
         self.contorno = contorno or Contorno(style="no")
 
 
+class SimboloRellenoMarcadores(_Simbolo):
+    """Una rejilla de marcadores -> MarkerFillSymbol de ArcMap (esriMFSGrid).
+
+    Un PointPatternFill de QGIS con filas o columnas desplazadas no cabe en
+    una sola rejilla: el parser lo emite como un SimboloMultiCapa de 2 o 4 de
+    estas, cada una con su separacion y su desfase (`desfase_*_pt`, el
+    XOffset/YOffset de IFillProperties). `marcador` es un SimboloMarcador o
+    SimboloMarcadorCaracter.
+    """
+
+    def __init__(self, marcador, sep_x_pt, sep_y_pt, desfase_x_pt=0.0,
+                 desfase_y_pt=0.0, contorno=None):
+        self.marcador = marcador
+        self.sep_x_pt = sep_x_pt
+        self.sep_y_pt = sep_y_pt
+        self.desfase_x_pt = desfase_x_pt
+        self.desfase_y_pt = desfase_y_pt
+        self.contorno = contorno or Contorno(style="no")
+
+
 class SimboloMultiCapa(_Simbolo):
     """Varias symbol-layers superpuestas -> MultiLayerFillSymbol de ArcMap.
 

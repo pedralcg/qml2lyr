@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(RAIZ, "src"))
 
 import parser_qgis  # noqa: E402
 from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
+                    SimboloMultiCapa, SimboloRelleno, SimboloRellenoMarcadores,
                     RendererValoresUnicos, SimbologiaNoSoportada)
 
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
@@ -86,6 +87,45 @@ def test_opacidad_simbolo(fallos):
     for nombre in ("opacidad_simbolo_unico.qml", "opacidad_categorias_mixta.qml"):
         if any(u"lo pinta opaco" in a for a in _qml(nombre)[0].avisos):
             fallos.append(u"%s: vuelve la redaccion vieja del aviso" % nombre)
+
+
+def _rejillas(simbolo):
+    capas = simbolo.capas if isinstance(simbolo, SimboloMultiCapa) else [simbolo]
+    return sorted((round(c.sep_x_pt, 3), round(c.sep_y_pt, 3),
+                   round(c.desfase_x_pt, 3), round(c.desfase_y_pt, 3))
+                  for c in capas if isinstance(c, SimboloRellenoMarcadores))
+
+
+def test_relleno_puntos(fallos):
+    """QGIS 3.44.12: PointPatternFill -> 2 rejillas con las filas desplazadas
+    y 4 con filas y columnas; el borde (SimpleLine) sigue en el multicapa."""
+    capa = _qml("relleno_puntos.qml")[0]
+    por_valor = dict((c.valor, c.simbolo) for c in capa.renderer.clases)
+    d, m = 2.4 * MM2PT, 1.2 * MM2PT
+    _igual(fallos, _rejillas(por_valor[u"A"]),
+           sorted([(round(d, 3), round(2 * d, 3), 0.0, 0.0),
+                   (round(d, 3), round(2 * d, 3), round(m, 3), round(d, 3))]),
+           u"A: filas desplazadas media separacion")
+    capas_a = por_valor[u"A"].capas
+    if not isinstance(capas_a[-1], SimboloRelleno) or \
+            capas_a[-1].contorno.style != u"solid":
+        fallos.append(u"A: el borde de encima deberia ser el ultimo: %r"
+                      % capas_a)
+    marcador = capas_a[0].marcador
+    _cerca(fallos, marcador.size_pt, 1.2 * MM2PT, u"tamanyo del marcador")
+    _igual(fallos, marcador.rgb, (51, 160, 44), u"color del marcador")
+
+    disp_x, disp_y = 3 * MM2PT, 1.2 * MM2PT
+    esperadas = sorted(
+        (round(2 * d, 3), round(2 * d, 3),
+         round((a * d + b * disp_x) % (2 * d), 3),
+         round((b * d + a * disp_y) % (2 * d), 3))
+        for a in (0, 1) for b in (0, 1))
+    _igual(fallos, _rejillas(por_valor[u"B"]), esperadas,
+           u"B: filas y columnas desplazadas")
+    for texto in (u"4 rejillas", u"offset 5.4"):
+        if not any(texto in a for a in capa.avisos):
+            fallos.append(u"falta el aviso '%s': %r" % (texto, capa.avisos))
 
 
 def test_angulo_escalas(fallos):

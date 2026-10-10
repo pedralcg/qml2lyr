@@ -360,6 +360,48 @@ def caso_opacidad_simbolo(fallos):
                       u"%r, %d px del color opaco" % (pixeles, mezcla, opaco))
 
 
+def _marker_fills(simbolo):
+    """MarkerFill de un simbolo volcado (suelto o dentro de un multicapa)."""
+    capas = simbolo.get("capas") if simbolo.get("tipo") == "MultiLayerFill" \
+        else [simbolo]
+    return [c for c in capas if c.get("tipo") == "MarkerFill"]
+
+
+def caso_relleno_puntos(fallos):
+    """(2ter) PointPatternFill -> MarkerFillSymbol: 2 rejillas con las filas
+    desplazadas, 4 con filas y columnas, cada una con su separacion y desfase,
+    y el borde en el mismo multicapa. Que se dibuja: pixeles del marcador.
+
+    La red de puntos (vectores a los vecinos) se midio por render contra QGIS
+    3.44.12 el 2026-10-10 en cinco configuraciones: identica salvo la fase."""
+    lyr = _salida(u"relleno_puntos.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"relleno_puntos.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"relleno_puntos no convirtio: %r" % capa)
+        return
+    clases = dict((c["valor"], c["simbolo"])
+                  for c in lyr_dump.dump_lyr(lyr)["renderer"]["clases"])
+    d, m = round(2.4 * 2.834645669, 3), round(1.2 * 2.834645669, 3)
+    a = _marker_fills(clases[u"A"])
+    _igual(fallos, sorted((f["sep_pt"], f["desfase_pt"]) for f in a),
+           [([d, round(2 * d, 3)], [0.0, 0.0]), ([d, round(2 * d, 3)], [m, d])],
+           u"rejillas de A")
+    if a:
+        _igual(fallos, (a[0]["estilo"], a[0]["marcador"]["tipo"],
+                        a[0]["marcador"]["color"]["rgb"]),
+               ("rejilla", "SimpleMarker", [51, 160, 44]), u"marcador de A")
+    # El borde (SimpleLine de QGIS, el de encima) es la capa 0 del multicapa.
+    _igual(fallos, clases[u"A"]["capas"][0].get("tipo"), "SimpleFill",
+           u"borde de A delante de las rejillas")
+    _igual(fallos, len(_marker_fills(clases[u"B"])), 4, u"rejillas de B")
+    pixeles = _pixeles_de_color(lyr, (51, 160, 44),
+                                _salida(u"relleno_puntos.png"), tolerancia=30)
+    if pixeles < 500:
+        fallos.append(u"los marcadores de A no se dibujan: %d px" % pixeles)
+
+
 def caso_tilde_posicional(fallos):
     """(3) Nombre y ruta con tilde por el modo posicional: JSON valido y
     exit 0. Antes reventaba con UnicodeDecodeError tras escribir el .lyr."""
@@ -1353,6 +1395,7 @@ CASOS = [
     ("defquery_posicional", caso_defquery_posicional),
     ("opacidad_capa", caso_opacidad_capa),
     ("opacidad_simbolo", caso_opacidad_simbolo),
+    ("relleno_puntos", caso_relleno_puntos),
     ("tilde_posicional", caso_tilde_posicional),
     ("tilde_args_json", caso_tilde_args_json),
     ("raster_alfa0", caso_raster_alfa0),

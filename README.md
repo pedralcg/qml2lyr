@@ -36,7 +36,7 @@ estilo por defecto.
 | | |
 |---|---|
 | **Renderers** | símbolo único, categorizado (también por la concatenación de 2 o 3 campos), graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
-| **Relleno** | sólido, hueco, tramado (6 patrones), multicapa, relleno con imagen |
+| **Relleno** | sólido, hueco, tramado (6 patrones), multicapa, relleno con imagen, relleno de puntos (también con filas o columnas desplazadas) |
 | **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot` |
 | **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
 | **Capa** | definition query, opacidad de capa (y la de símbolo cuando es la misma en todas las clases), visibilidad por escala |

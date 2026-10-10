@@ -100,6 +100,18 @@ def _dump_simbolo(sym):
                 pass
         return d
 
+    # MarkerFillSymbol tambien responde a IFillSymbol: antes que SimpleFill.
+    mf = _qi(sym, D.IMarkerFillSymbol)
+    if mf is not None:
+        prop = _qi(sym, D.IFillProperties)
+        return {"tipo": "MarkerFill",
+                "estilo": "rejilla" if mf.Style == D.esriMFSGrid else mf.Style,
+                "sep_pt": [round(prop.XSeparation, 3),
+                           round(prop.YSeparation, 3)],
+                "desfase_pt": [round(prop.XOffset, 3), round(prop.YOffset, 3)],
+                "marcador": _dump_simbolo(mf.MarkerSymbol),
+                "contorno": _dump_linea(_qi(mf, D.IFillSymbol).Outline)}
+
     lf = _qi(sym, D.ILineFillSymbol)
     if lf is not None:
         return {"tipo": "LineFill",
