@@ -23,6 +23,7 @@ import re as _re
 
 from modelo import (SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
+                    SimboloRellenoMarcadores,
                     RendererSimple, RendererValoresUnicos, RendererGraduado,
                     RendererRasterValoresUnicos, RendererRasterCortes,
                     RendererRasterEstirado, RendererRasterRGB,
@@ -197,7 +198,14 @@ def _simbolo_imagen(simbolo):
     pf.CreateFillSymbolFromFile(getattr(D, tipo_nombre), ruta)
     if simbolo.angulo:
         pf.Angle = float(simbolo.angulo)
-    _qi_exig(pf, D.IFillSymbol).Outline = _contorno(simbolo.contorno)
+    relleno = _qi_exig(pf, D.IFillSymbol)
+    if getattr(simbolo, "color", None) is not None:
+        # BMP de 1 bit (trama `dense`): IFillSymbol.Color pinta los pixeles a
+        # 1 y un BackgroundColor nulo deja los pixeles a 0 transparentes.
+        # Medido por render el 2026-10-10 sobre una capa roja: 0 % de blanco.
+        relleno.Color = _color(simbolo.color)
+        pf.BackgroundColor = _color(_HUECO_RGB, alpha=0)
+    relleno.Outline = _contorno(simbolo.contorno)
     return pf
 
 
@@ -251,6 +259,18 @@ def _simbolo(simbolo):
 
     if isinstance(simbolo, SimboloImagen):
         return _qi_exig(_simbolo_imagen(simbolo), D.ISymbol)
+
+    if isinstance(simbolo, SimboloRellenoMarcadores):
+        mf = _nobj(D.MarkerFillSymbol, D.IMarkerFillSymbol)
+        mf.Style = D.esriMFSGrid
+        mf.MarkerSymbol = _qi_exig(_simbolo(simbolo.marcador), D.IMarkerSymbol)
+        propiedades = _qi_exig(mf, D.IFillProperties)
+        propiedades.XSeparation = float(simbolo.sep_x_pt)
+        propiedades.YSeparation = float(simbolo.sep_y_pt)
+        propiedades.XOffset = float(simbolo.desfase_x_pt)
+        propiedades.YOffset = float(simbolo.desfase_y_pt)
+        _qi_exig(mf, D.IFillSymbol).Outline = _contorno(simbolo.contorno)
+        return _qi_exig(mf, D.ISymbol)
 
     if isinstance(simbolo, SimboloMarcador):
         ms = _nobj(D.SimpleMarkerSymbol, D.ISimpleMarkerSymbol)
@@ -1387,19 +1407,121 @@ def _capas_del_documento(mxd):
     return propias
 
 
-def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None):
+#: Valores de `agrupar_wms` del modo --mxd (None = no agrupar).
+AGRUPAR_WMS = ("grupo", "proyecto")
+
+
+def _plan_agrupar_wms(arbol, maplayers, por_id, modo):
+    """Que capas WMS del arbol se juntan en una sola capa de ArcMap.
+
+    Un WMSMapLayer de ArcMap arrastra el catalogo ENTERO del servicio como
+    subcapas, y al abrir el .mxd cada capa WMS pide su GetCapabilities: once
+    ortofotos de un mismo servidor son once catalogos y once peticiones. Se
+    juntan las que piden el mismo servicio (misma `url=`, que lleva la version
+    si la hay) con la misma opacidad y las mismas escalas, que son de la CAPA
+    en ArcMap; las que difieren se quedan sueltas. Los WMTS no entran: un
+    WMTSLayer es una capa del servicio, no un catalogo.
+
+    `modo` "grupo": solo hermanas de un mismo grupo de QGIS (el arbol no
+    cambia). "proyecto": todas, y la capa agrupada va donde estaba la primera.
+
+    -> lista de {"miembros": [(nodo, visible)], "servicio": ServicioWMS,
+    "opacidad", "escala_min", "escala_max"}, en el orden del arbol. `visible`
+    es la del nodo en "grupo" y la efectiva (con la de sus grupos) en
+    "proyecto"."""
+    import parser_qgis
+    from modelo import ServicioWMS
+    conjuntos, orden = {}, []
+
+    def recorrer(nodos, ruta, visible_arriba):
+        for nodo in nodos:
+            if "grupo" in nodo:
+                recorrer(nodo["hijos"], ruta + (nodo["grupo"],),
+                         visible_arriba and nodo["visible"])
+                continue
+            ml = maplayers.get(nodo["id"])
+            convertidas = [r for r in por_id.get(nodo["id"], []) if r["ok"]]
+            if ml is None or len(convertidas) != 1 or \
+                    ml.findtext("provider") != u"wms":
+                continue
+            try:
+                capa = parser_qgis.parse_maplayer(ml)[0]
+            except Exception:
+                continue
+            if not isinstance(capa.servicio, ServicioWMS):
+                continue
+            clave = (ruta if modo == "grupo" else None, capa.servicio.url,
+                     round(capa.opacidad, 6), capa.escala_min, capa.escala_max)
+            if clave not in conjuntos:
+                conjuntos[clave] = {"miembros": [], "capas": [],
+                                    "url": capa.servicio.url,
+                                    "opacidad": capa.opacidad,
+                                    "escala_min": capa.escala_min,
+                                    "escala_max": capa.escala_max}
+                orden.append(clave)
+            visible = nodo["visible"] and (modo == "grupo" or visible_arriba)
+            conjuntos[clave]["miembros"].append((nodo, visible))
+            conjuntos[clave]["capas"].append(capa.servicio.capas)
+
+    recorrer(arbol, (), True)
+    plan = []
+    for clave in orden:
+        c = conjuntos[clave]
+        if len(c["miembros"]) < 2:
+            continue
+        encendidas = []
+        for (nodo, visible), capas in zip(c["miembros"], c["capas"]):
+            if visible:
+                encendidas.extend(x for x in capas if x not in encendidas)
+        # Si ninguna estaba encendida, se encienden las subcapas de todas y se
+        # apaga la capa: al marcarla en ArcMap sale lo que eran las de QGIS.
+        if not encendidas:
+            for capas in c["capas"]:
+                encendidas.extend(x for x in capas if x not in encendidas)
+        c["servicio"] = ServicioWMS(url=c["url"], capas=encendidas)
+        plan.append(c)
+    return plan
+
+
+def _emitir_wms_agrupado(conjunto, dir_lyr, dir_tmp, usados):
+    """Un conjunto del plan -> resultado de emitir su capa WMS agrupada."""
+    from modelo import CapaEstilo
+    miembros = [n for n, _ in conjunto["miembros"]]
+    nombre = u"%s (+%d del mismo WMS)" % (miembros[0]["nombre"],
+                                          len(miembros) - 1)
+    capa = CapaEstilo(nombre=nombre, renderer=None,
+                      opacidad=conjunto["opacidad"],
+                      escala_min=conjunto["escala_min"],
+                      escala_max=conjunto["escala_max"])
+    capa.servicio = conjunto["servicio"]
+    salida = os.path.join(dir_lyr, _nombre_unico(_nombre_fichero(nombre),
+                                                 usados) + u".lyr")
+    return _emitir_capa_segura(capa, None, salida, dir_tmp)
+
+
+def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None,
+               agrupar_wms=None):
     """Modo --mxd: un proyecto .qgz -> un .mxd con el mismo arbol de capas.
 
     Convierte cada capa como el batch (los .lyr quedan en `<mxd>_lyr/`) y los
     monta en el orden, los grupos y la visibilidad del panel de capas de QGIS,
     con el SRC y la extension del proyecto. Lo que no convierte se OMITE y se
     lista con su motivo; un raster RGB entra con el render por defecto de
-    ArcMap, avisando. No sobrescribe un .mxd existente."""
+    ArcMap, avisando. No sobrescribe un .mxd existente.
+
+    `agrupar_wms` ("grupo", "proyecto" o None): junta en una capa las WMS del
+    mismo servicio (`_plan_agrupar_wms`). Sin el, el .mxd es el de siempre."""
     import arcpy
     import parser_qgis
     resultado = {"ok": False, "modo": "mxd", "entrada": ruta_qgz,
                  "salida": ruta_mxd, "capas": [], "omitidas": [], "avisos": []}
     avisos, omitidas = resultado["avisos"], resultado["omitidas"]
+    if agrupar_wms not in (None,) + AGRUPAR_WMS:
+        resultado.update({"error": u"agrupar_wms='%s' desconocido (validos: "
+                                   u"%s)" % (agrupar_wms,
+                                             u", ".join(AGRUPAR_WMS)),
+                          "tipo_error": "ValueError"})
+        return resultado
     if os.path.exists(ruta_mxd):
         resultado.update({"error": u"%s ya existe: el modo --mxd no "
                                    u"sobrescribe" % ruta_mxd,
@@ -1427,6 +1549,39 @@ def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None):
     maplayers = dict((ml.findtext("id"), ml) for ml in raiz.iter("maplayer"))
     dir_proyecto = os.path.dirname(os.path.abspath(ruta_qgz))
 
+    # Capas WMS agrupadas: la primera de cada conjunto pone la capa agrupada
+    # y las demas no ponen nada.
+    agrupada_por_id, absorbidas = {}, {}
+    if agrupar_wms:
+        resultado["agrupadas"] = []
+        usados = set(os.path.splitext(f)[0] for f in os.listdir(dir_lyr)) \
+            if os.path.isdir(dir_lyr) else set()
+        for conjunto in _plan_agrupar_wms(_arbol_qgs(raiz), maplayers, por_id,
+                                          agrupar_wms):
+            hecho = _emitir_wms_agrupado(conjunto, dir_lyr, dir_tmp, usados)
+            nombres = [n["nombre"] for n, _ in conjunto["miembros"]]
+            if not hecho["ok"]:
+                avisos.append(u"no se pudieron juntar %s (%s): van sueltas. %s"
+                              % (u", ".join(nombres), conjunto["url"],
+                                 hecho.get("error") or u""))
+                continue
+            visibles = [n["nombre"] for n, v in conjunto["miembros"] if v]
+            primero = conjunto["miembros"][0][0]["id"]
+            agrupada_por_id[primero] = (hecho, bool(visibles))
+            for nodo, _ in conjunto["miembros"][1:]:
+                absorbidas[nodo["id"]] = hecho["salida"]
+            resultado["agrupadas"].append({
+                "nombre": hecho["nombre"], "salida": hecho["salida"],
+                "servicio": conjunto["url"], "capas": nombres,
+                "encendidas": visibles, "avisos": hecho["avisos"]})
+            avisos.append(
+                u"%d capas del WMS %s juntas en una ('%s'): %s. Las subcapas "
+                u"llevan el nombre del servicio, no el de QGIS%s"
+                % (len(nombres), conjunto["url"], hecho["nombre"],
+                   u", ".join(nombres),
+                   u"; y con varias encendidas, el servicio las dibuja en SU "
+                   u"orden, no en el de QGIS" if len(visibles) > 1 else u""))
+
     mxd = arcpy.mapping.MapDocument(plantilla)
     df = arcpy.mapping.ListDataFrames(mxd)[0]
     previas = arcpy.mapping.ListLayers(mxd, "", df)
@@ -1444,10 +1599,22 @@ def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None):
         avisos.append(u"el proyecto usa un orden de dibujado propio: el MXD "
                       u"dibuja en el orden del arbol de capas")
     grupo_vacio = _lyr_grupo_vacio(dir_tmp)
-    puestas = {"capas": 0, "grupos": 0}
+    puestas = {"capas": 0, "grupos": 0, "absorbidas": 0}
 
     def capas_arcpy(nodo):
         """Capa del arbol -> lista de capas de arcpy (vacia si se omite)."""
+        if nodo["id"] in absorbidas:
+            for r in por_id.get(nodo["id"], []):
+                r["agrupada_en"] = absorbidas[nodo["id"]]
+            return []
+        if nodo["id"] in agrupada_por_id:
+            hecho, visible = agrupada_por_id[nodo["id"]]
+            for r in por_id.get(nodo["id"], []):
+                r["agrupada_en"] = hecho["salida"]
+            capa = arcpy.mapping.Layer(hecho["salida"])
+            capa.name = hecho["nombre"]
+            nodo["visible"] = visible
+            return [capa]
         convertidas = [r for r in por_id.get(nodo["id"], []) if r["ok"]]
         salida = []
         for r in convertidas:
@@ -1495,14 +1662,20 @@ def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None):
                 _anadir(g, grupo)
                 nuevo = _ultimo_grupo(nodo["grupo"], grupo)
                 antes = puestas["capas"]
+                antes_absorbidas = puestas["absorbidas"]
                 poner(nodo["hijos"], nuevo)
                 if puestas["capas"] == antes:
                     arcpy.mapping.RemoveLayer(df, nuevo)
-                    omitidas.append({"nombre": u"[grupo] %s" % nodo["grupo"],
-                                     "motivo": u"todas sus capas se omitieron"})
+                    omitidas.append({
+                        "nombre": u"[grupo] %s" % nodo["grupo"],
+                        "motivo": u"sus capas WMS van en una capa agrupada de "
+                                  u"otro grupo" if puestas["absorbidas"] >
+                        antes_absorbidas else u"todas sus capas se omitieron"})
                 else:
                     puestas["grupos"] += 1
                 continue
+            if nodo["id"] in absorbidas:
+                puestas["absorbidas"] += 1
             for capa in capas_arcpy(nodo):
                 capa.visible = nodo["visible"]
                 _anadir(capa, grupo)
@@ -1597,7 +1770,8 @@ def _imprimir_json(obj):
 _CLAVES_ARGS_JSON = {
     "qml": (("qml", "salida"),
             ("dato", "servicio", "nombre", "defquery", "dir_tmp")),
-    "mxd": (("qgz", "salida"), ("plantilla", "remap", "dir_tmp")),
+    "mxd": (("qgz", "salida"), ("plantilla", "remap", "dir_tmp",
+                                "agrupar_wms")),
 }
 
 
@@ -1658,6 +1832,10 @@ def _main(argv):
                    help="modo batch: entrada=.qgz, salida=directorio")
     p.add_argument("--mxd", action="store_true",
                    help="modo MXD: entrada=.qgz, salida=.mxd (no sobrescribe)")
+    p.add_argument("--agrupar-wms", dest="agrupar_wms", default=None,
+                   choices=AGRUPAR_WMS,
+                   help="modo --mxd: junta en una capa las WMS del mismo "
+                        "servicio, dentro de cada grupo o en todo el proyecto")
     p.add_argument("--plantilla", default=None,
                    help="modo --mxd: .mxd de partida (por defecto, ISO A3 "
                         "horizontal de ArcGIS)")
@@ -1683,6 +1861,8 @@ def _main(argv):
         p.error("--remap solo vale en los modos --batch y --mxd")
     if args.plantilla and not args.mxd:
         p.error("--plantilla solo vale en modo --mxd")
+    if args.agrupar_wms and not args.mxd:
+        p.error("--agrupar-wms solo vale en modo --mxd")
 
     if args.mxd:
         if len(args.posicionales) != 2:
@@ -1693,7 +1873,8 @@ def _main(argv):
         except ValueError as e:
             p.error(_texto_error(e).encode("utf-8"))
         resultado = emitir_mxd(args.posicionales[0], args.posicionales[1],
-                               plantilla=args.plantilla, remap=reglas)
+                               plantilla=args.plantilla, remap=reglas,
+                               agrupar_wms=args.agrupar_wms)
         _imprimir_json(resultado)
         return 0 if resultado.get("ok") else 2
 
@@ -1724,7 +1905,8 @@ def _main(argv):
                 return 2
             resultado = emitir_mxd(datos["qgz"], datos["salida"],
                                    plantilla=datos.get("plantilla"),
-                                   remap=reglas, dir_tmp=datos.get("dir_tmp"))
+                                   remap=reglas, dir_tmp=datos.get("dir_tmp"),
+                                   agrupar_wms=datos.get("agrupar_wms"))
             _imprimir_json(resultado)
             return 0 if resultado.get("ok") else 2
         resultado = emitir_qml(datos["qml"], datos.get("dato"),

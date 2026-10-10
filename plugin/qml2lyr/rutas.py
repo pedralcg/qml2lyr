@@ -68,6 +68,18 @@ def plantilla_mxd():
     return _ajuste("qml2lyr/plantilla") or None
 
 
+#: Valores de `qml2lyr/agrupar_wms` (los del motor, `emisor.AGRUPAR_WMS`).
+AGRUPAR_WMS = ("grupo", "proyecto")
+
+
+def agrupar_wms():
+    """Modo MXD: juntar en una capa las WMS del mismo servicio
+    (`qml2lyr/agrupar_wms`): "grupo", "proyecto" o None (no agrupar, lo de
+    siempre). Un valor desconocido cuenta como no agrupar."""
+    valor = _ajuste("qml2lyr/agrupar_wms")
+    return valor if valor in AGRUPAR_WMS else None
+
+
 def resolver():
     """(python27, emisor) listos para usar. Lanza RutaNoValida si no hay."""
     py27 = _ajuste("qml2lyr/python27")

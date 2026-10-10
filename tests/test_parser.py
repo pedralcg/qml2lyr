@@ -21,12 +21,15 @@ sys.path.insert(0, os.path.join(RAIZ, "src"))
 
 import parser_qgis  # noqa: E402
 from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
+                    SimboloMultiCapa, SimboloRelleno, SimboloRellenoMarcadores,
+                    SimboloImagen,
                     RendererValoresUnicos, SimbologiaNoSoportada)
 
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
 QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
 QGZ_WMS = os.path.join(RAIZ, "tests", "fixtures", "batch_wms.qgz")
+QGZ_XYZ = os.path.join(RAIZ, "tests", "fixtures", "xyz_wmts.qgz")
 MM2PT = 2.834645669
 
 
@@ -63,6 +66,111 @@ def test_opacidad(fallos):
     """QGIS 3.44.12: <layerOpacity> se lee tambien por el camino .qml."""
     _igual(fallos, _qml("poligono_opacidad_50.qml")[0].opacidad, 0.5,
            u"opacidad de capa")
+
+
+def test_opacidad_simbolo(fallos):
+    """QGIS 3.44.12: la opacidad de SIMBOLO igual en todas las clases pasa a
+    la de capa (multiplicada por la que hubiera); distinta, se avisa."""
+    capa = _qml("opacidad_simbolo_unico.qml")[0]
+    _cerca(fallos, capa.opacidad, 0.2, u"0,4 de simbolo x 0,5 de capa")
+    if not any(u"transparencia de CAPA (80%)" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la conversion: %r" % capa.avisos)
+
+    capa = _qml("opacidad_categorias_igual.qml")[0]
+    _cerca(fallos, capa.opacidad, 0.5, u"categorias las dos a 0,5")
+
+    capa = _qml("opacidad_categorias_mixta.qml")[0]
+    _igual(fallos, capa.opacidad, 1.0, u"opacidades distintas: capa opaca")
+    if not any(u"opacidades distintas" in a and u"'Tipo A' 0.4" in a
+               for a in capa.avisos):
+        fallos.append(u"no avisa de las opacidades distintas: %r"
+                      % capa.avisos)
+    # La redaccion vieja se leia como falsa (2026-09-21): que no vuelva.
+    for nombre in ("opacidad_simbolo_unico.qml", "opacidad_categorias_mixta.qml"):
+        if any(u"lo pinta opaco" in a for a in _qml(nombre)[0].avisos):
+            fallos.append(u"%s: vuelve la redaccion vieja del aviso" % nombre)
+
+
+def _rejillas(simbolo):
+    capas = simbolo.capas if isinstance(simbolo, SimboloMultiCapa) else [simbolo]
+    return sorted((round(c.sep_x_pt, 3), round(c.sep_y_pt, 3),
+                   round(c.desfase_x_pt, 3), round(c.desfase_y_pt, 3))
+                  for c in capas if isinstance(c, SimboloRellenoMarcadores))
+
+
+def test_relleno_puntos(fallos):
+    """QGIS 3.44.12: PointPatternFill -> 2 rejillas con las filas desplazadas
+    y 4 con filas y columnas; el borde (SimpleLine) sigue en el multicapa."""
+    capa = _qml("relleno_puntos.qml")[0]
+    por_valor = dict((c.valor, c.simbolo) for c in capa.renderer.clases)
+    d, m = 2.4 * MM2PT, 1.2 * MM2PT
+    _igual(fallos, _rejillas(por_valor[u"A"]),
+           sorted([(round(d, 3), round(2 * d, 3), 0.0, 0.0),
+                   (round(d, 3), round(2 * d, 3), round(m, 3), round(d, 3))]),
+           u"A: filas desplazadas media separacion")
+    capas_a = por_valor[u"A"].capas
+    if not isinstance(capas_a[-1], SimboloRelleno) or \
+            capas_a[-1].contorno.style != u"solid":
+        fallos.append(u"A: el borde de encima deberia ser el ultimo: %r"
+                      % capas_a)
+    marcador = capas_a[0].marcador
+    _cerca(fallos, marcador.size_pt, 1.2 * MM2PT, u"tamanyo del marcador")
+    _igual(fallos, marcador.rgb, (51, 160, 44), u"color del marcador")
+
+    disp_x, disp_y = 3 * MM2PT, 1.2 * MM2PT
+    esperadas = sorted(
+        (round(2 * d, 3), round(2 * d, 3),
+         round((a * d + b * disp_x) % (2 * d), 3),
+         round((b * d + a * disp_y) % (2 * d), 3))
+        for a in (0, 1) for b in (0, 1))
+    _igual(fallos, _rejillas(por_valor[u"B"]), esperadas,
+           u"B: filas y columnas desplazadas")
+    for texto in (u"4 rejillas", u"offset 5.4"):
+        if not any(texto in a for a in capa.avisos):
+            fallos.append(u"falta el aviso '%s': %r" % (texto, capa.avisos))
+
+
+def _pixeles_bmp_1bit(datos):
+    """BMP de 1 bit -> filas de 0/1 (de arriba abajo)."""
+    import struct
+    inicio = struct.unpack("<I", datos[10:14])[0]
+    ancho, alto = struct.unpack("<ii", datos[18:26])
+    por_fila = ((ancho + 31) // 32) * 4
+    filas = []
+    for y in range(alto):
+        crudo = datos[inicio + y * por_fila:inicio + (y + 1) * por_fila]
+        bits = u"".join(u"{0:08b}".format(ord(b) if isinstance(b, str) else b)
+                        for b in crudo)
+        filas.append([int(c) for c in bits[:ancho]])
+    return list(reversed(filas))
+
+
+def test_tramas_densas(fallos):
+    """QGIS 3.44.12: `denseN` -> relleno de imagen (BMP de 1 bit con el patron
+    de Qt) del color del relleno; la cobertura de cada nivel es la de Qt."""
+    capa = _qml("tramas_densas.qml")[0]
+    por_valor = dict((c.valor, c.simbolo) for c in capa.renderer.clases)
+    a = por_valor[u"A"]
+    if not isinstance(a, SimboloImagen):
+        fallos.append(u"dense5 deberia ser SimboloImagen: %r" % a)
+    else:
+        _igual(fallos, (a.formato, a.color, a.contorno.style, a.contorno.rgb),
+               (u"bmp", (31, 120, 180), u"solid", (31, 120, 180)),
+               u"dense5 con su borde")
+        pix = _pixeles_bmp_1bit(a.imagen_bytes)
+        _igual(fallos, (len(pix), len(pix[0])), (32, 32), u"tesela 32x32")
+        _cerca(fallos, sum(map(sum, pix)) / 1024.0, 0.375, u"cobertura dense5")
+    b = por_valor[u"B"]
+    _igual(fallos, [type(c).__name__ for c in getattr(b, "capas", [])],
+           [u"SimboloImagen", u"SimboloRelleno"], u"dense1 bajo un borde")
+    # Cobertura de Qt para cada nivel (medida en QGIS a 96 y 300 dpi).
+    for n, cob in ((1, 0.9375), (2, 0.875), (3, 0.625), (4, 0.5), (5, 0.375),
+                   (6, 0.125), (7, 0.0625)):
+        pix = _pixeles_bmp_1bit(parser_qgis._bmp_trama_densa("dense%d" % n))
+        _cerca(fallos, sum(map(sum, pix)) / 1024.0, cob,
+               u"cobertura de dense%d" % n)
+    if not any(u"misma cobertura" in a for a in capa.avisos):
+        fallos.append(u"falta el aviso de la trama: %r" % capa.avisos)
 
 
 def test_angulo_escalas(fallos):
@@ -302,6 +410,50 @@ def test_wms(fallos):
         u"format=image/png&layers=a&styles=raro&url=http://x/wms"))[0]
     if not any(u"raro" in a for a in capa.avisos):
         fallos.append(u"no avisa del estilo WMS: %s" % capa.avisos)
+
+
+def test_xyz_que_es_wmts(fallos):
+    """QGIS 3.44.12: un XYZ cuya URL es un GetTile de WMTS (forma KVP) sale
+    como capa WMTS; uno REST o uno puro se siguen rechazando, el REST con la
+    pista de cargarlo en QGIS como WMTS."""
+    capas = {}
+    for ml in parser_qgis._raiz_qgs(QGZ_XYZ).iter("maplayer"):
+        try:
+            capas[ml.findtext("layername")] = parser_qgis.parse_maplayer(ml)[0]
+        except SimbologiaNoSoportada as e:
+            capas[ml.findtext("layername")] = unicode(e)
+    s = getattr(capas.get(u"XYZ que es WMTS"), "servicio", None)
+    _igual(fallos, (type(s).__name__, getattr(s, "url", None),
+                    getattr(s, "capa", None), getattr(s, "matriz", None),
+                    getattr(s, "estilo", None), getattr(s, "formato", None)),
+           (u"ServicioWMTS", u"http://127.0.0.1:8765/wmts", u"mapa",
+            u"EPSG:25830", u"default", u"image/png"), u"GetTile KVP como XYZ")
+    rest = capas.get(u"WMTS REST como XYZ")
+    if not isinstance(rest, unicode) or u"forma REST" not in rest:
+        fallos.append(u"el REST deberia rechazarse con la pista: %r" % rest)
+    osm = capas.get(u"OSM")
+    if not isinstance(osm, unicode) or u"REST" in osm:
+        fallos.append(u"OSM deberia rechazarse sin la pista: %r" % osm)
+
+    # El PNOA del IGN cargado como XYZ: origen literal escrito por QGIS
+    # 3.44.12 (2026-10-10). Convertido, el WMTS conecta en ArcMap 10.5. Que
+    # pinta queda para el QA a mano: un export standalone de arcpy no dibuja
+    # ningun WMTS, tampoco el del IGN de la v0.2.0 (control del mismo dia).
+    import xml.etree.ElementTree as ET
+    ml = ET.Element("maplayer")
+    ET.SubElement(ml, "layername").text = u"PNOA"
+    ET.SubElement(ml, "provider").text = u"wms"
+    ET.SubElement(ml, "datasource").text = (
+        u"type=xyz&url=https://www.ign.es/wmts/pnoa-ma%3Frequest%3DGetTile%26"
+        u"service%3DWMTS%26VERSION%3D1.0.0%26Layer%3DOI.OrthoimageCoverage%26"
+        u"Style%3Ddefault%26Format%3Dimage/jpeg%26TileMatrixSet%3D"
+        u"GoogleMapsCompatible%26TileMatrix%3D%7Bz%7D%26TileRow%3D%7By%7D%26"
+        u"TileCol%3D%7Bx%7D&zmax=19&zmin=0")
+    s = parser_qgis.parse_maplayer(ml)[0].servicio
+    _igual(fallos, (s.url, s.capa, s.matriz, s.estilo, s.formato),
+           (u"https://www.ign.es/wmts/pnoa-ma", u"OI.OrthoimageCoverage",
+            u"GoogleMapsCompatible", u"default", u"image/jpeg"),
+           u"PNOA del IGN como XYZ")
 
 
 def test_etiquetas(fallos):

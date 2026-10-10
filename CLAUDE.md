@@ -90,7 +90,8 @@ contaminan). Tres modos:
   <args.json>` — fichero **UTF-8**. Clave `modo`: `"qml"` (por defecto: `qml`,
   `salida` y `dato` **o** `servicio` —el `source()` de una capa WMS/WMTS viva—,
   más `nombre`, `defquery`, `dir_tmp`) o `"mxd"` (`qgz`, `salida`, más
-  `plantilla`, `remap` como lista de `"ORIGEN=DESTINO"`, `dir_tmp`). Las claves se
+  `plantilla`, `remap` como lista de `"ORIGEN=DESTINO"`, `dir_tmp`, `agrupar_wms`
+  `"grupo"`/`"proyecto"`). Las claves se
   validan por modo: una desconocida o de otro modo se **rechaza** (una errata
   tipo `def_query` perdería la def-query en silencio), y `dato` + `servicio` a la
   vez también. Existe por el gotcha de `sys.argv` en cp1252 (ver abajo), y de
@@ -123,6 +124,9 @@ contaminan). Tres modos:
   `ok=False`, `tipo_error: VerificacionFallida`, exit 2. Si el `.mxd` existe:
   `SalidaExiste`. **`mxd.title` de arcpy no se guarda** (ni con `saveACopy` ni
   con `save`): el título del proyecto no se traslada.
+  `--agrupar-wms grupo|proyecto` (`_plan_agrupar_wms`): las WMS con la misma
+  `url=`, opacidad y escalas van en UNA capa de ArcMap (hermanas de un grupo, o
+  todo el proyecto en el sitio de la primera). Sin la opción, el MXD de siempre.
 - JSON por capa: `ok`/`nombre`/`salida`/`avisos` o `error`/`tipo_error`, más una
   lista `avisos` de nivel superior para lo que no es de ninguna capa (p.ej. un
   temporal que no se pudo borrar). Una capa que falla se reporta `ok=False` y NO
@@ -138,7 +142,9 @@ contaminan). Tres modos:
 la del `.qgz` — las dos por `parser_qgis.combinar_defquery`, que tolera que
 cualquiera de las dos falte.
 
-Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / multicapa / línea
+Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / tramas `dense1-7`
+(relleno de imagen de 1 bit) / multicapa / relleno
+de puntos (`PointPatternFill`) / línea
 (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) / marcador (5 formas simples
 + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por escala.
 Categorizado por concatenación de 2-3 campos (`concat`/`||`, con o sin
@@ -149,7 +155,9 @@ Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado),
 **RGB** (`multibandcolor`: bandas, alfa, sin realce o estirado mín-máx por banda).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
 Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr` con
-`WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza.
+`WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza, salvo que su
+URL sea un `GetTile` KVP de WMTS (`parser_qgis._wmts_desde_gettile`): entonces
+es un WMTS contra la URL base.
 
 ## Gotchas críticos (no redescubrir)
 
@@ -257,6 +265,14 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   `IColor.RGB` (BGR empaquetado): el QI a `IRgbColor` aquí es poco fiable.
 - **Estirado, rango**: usa el min/max del DATASET, no el de la clasificación QGIS.
   `emitir()` compara ambos y AVISA si difieren.
+- **Tramas `denseN`** (medido 2026-10-10): son `Qt::DenseNPattern`, 8×8 en
+  **píxeles de dispositivo** (a 300 dpi QGIS pinta el mismo patrón en píxeles,
+  más fino en papel). Van a un `PictureFillSymbol` con un **BMP de 1 bit**
+  (`parser_qgis._bmp_1bit`, escrito con `struct`: el Python de ArcGIS no trae
+  PIL): `IFillSymbol.Color` pinta los 1 y un `BackgroundColor` **nulo** deja
+  los 0 transparentes. Cobertura igual a Qt a 96 y 300 dpi. **No usar una
+  rejilla de marcadores**: ArcMap dibuja un cuadrado pequeño con un número
+  impar de píxeles y unos 2 de más, y la cobertura en pantalla va a saltos.
 - **RasterFill**: ArcObjects 10.5 SÍ soporta `esriIPicturePNG` en
   `CreateFillSymbolFromFile`. El tamaño exacto del mosaico y la transparencia alfa
   quedan para QA visual.
@@ -274,6 +290,11 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   `fallo en <paso>: COMError: ...`.
 - **Ráster, opacidad**: no está en `<layerOpacity>` sino en el atributo `opacity`
   del `<rasterrenderer>`.
+- **Opacidad de SÍMBOLO** (`alpha` del `<symbol>`) ≠ alfa de color ≠ opacidad
+  de capa. El parser la guarda en `simbolo.opacidad` y `_aplicar_cabecera` la
+  pasa a `capa.opacidad` (multiplicando) si es la MISMA en todas las clases
+  que se dibujan (`_opacidad_de_simbolos`); si no, aviso. El emisor no la lee.
+  La de un sub-símbolo (`anidado=True`) solo se avisa.
 - **Ráster, valores ocultos**: `<rasterTransparency>` cuelga DENTRO de
   `<rasterrenderer>` y oculta valores sueltos al margen de la paleta. ArcMap no
   tiene transparencia por clase: el 100% se reproduce con símbolo nulo y lo demás
@@ -324,6 +345,14 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   pero el del clasificado es **`ClassField`**.
 - **Multicapa**: `IMultiLayerFillSymbol.AddLayer` **inserta en el índice 0**: hay
   que añadir en el orden del `.qgz` y el volcado sale invertido respecto al XML.
+- **`PointPatternFill`** (medido 2026-10-10, centros de marcador en un render a
+  96 dpi): el punto (i, j) de QGIS cae en `x = i·dx + disp_x·[j impar]`,
+  `y = j·dy + disp_y·[i impar]`. Con desplazamiento no cabe en UNA rejilla de
+  `MarkerFillSymbol`: se parte por paridad en 2 o 4 rejillas
+  (`parser_qgis._rejillas_de_puntos`). El **signo** de los ejes no importa (la
+  red con ±d es la misma trasladada), así que no hace falta saber hacia dónde
+  crece el `YOffset` de ArcMap. Una symbol-layer que sale multicapa se
+  **aplana** dentro del multicapa del símbolo (`_simbolo_fill`).
 - **Color vacío** (`outline_color=""`, estilos migrados de QGIS 2.x): lo que Qt
   pinte con eso no se deduce del XML → se avisa y se salta, NO se inventa un negro.
 - Encoding: Python 2.7 + acentos → literales `u""` siempre.

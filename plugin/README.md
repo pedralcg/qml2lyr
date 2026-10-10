@@ -95,6 +95,13 @@ horizontal de ArcGIS) y las **unidades que en esta máquina se llaman de otra
 forma**, una por línea: `Z:=L:\Mi unidad\Carto` lee el dato en `L:` y deja el
 `.mxd` apuntando a `Z:`.
 
+También si se **juntan las capas WMS del mismo servicio**. En ArcMap cada capa
+WMS arrastra el catálogo entero del servicio y pide su `GetCapabilities` al
+abrir el `.mxd`, así que diez ortofotos de un mismo servidor son diez catálogos.
+*Dentro de cada grupo* las junta sin cambiar el árbol; *en todo el proyecto*
+las junta todas donde estaba la primera (salen de sus grupos). Por defecto, no
+se junta nada.
+
 ## Estructura
 
 ```
@@ -107,7 +114,7 @@ plugin/
     qml2lyr_plugin.py     ← clase principal (acción, flujo, reportes)
     emisor_runner.py      ← puente subproceso py3 → py2.7 + parseo del JSON
     rutas.py              ← Python de ArcGIS (registro) y motor incluido; ajustes como override
-    settings_dialog.py    ← diálogo de ajustes: rutas, plantilla y remap (QSettings)
+    settings_dialog.py    ← diálogo de ajustes: rutas, plantilla, remap y agrupar WMS (QSettings)
     informe.py            ← textos del informe del .mxd, sin Qt (lo prueba el CI)
     motor/                ← NO versionado: src/*.py, lo copian deploy.ps1 y empaquetar.py
     compat_qt.py          ← enums de Qt/QGIS con y sin scope (Qt5 / Qt6)
@@ -123,7 +130,8 @@ plugin/
   la de scope y cae a la legada, así que el mismo código vale en QGIS 3.44 (Qt5,
   donde está el QA) y en QGIS 4 (Qt6). No usar enums sin scope en código nuevo.
 - Config en `QSettings` bajo la clave `qml2lyr/*` (nunca hardcodear rutas):
-  `python27`, `emisor`, `plantilla`, `remap`.
+  `python27`, `emisor`, `plantilla`, `remap`, `agrupar_wms` (`grupo`,
+  `proyecto` o vacío).
 - El modo MXD corre en una `QgsTask`: la tarea guarda una referencia viva en el
   plugin (`self._tarea`) y habla con la interfaz solo desde `finished()`, que
   va en el hilo principal. No es cancelable: el subproceso de ArcObjects no se

@@ -91,6 +91,13 @@ def _dump_simbolo(sym):
         d = {"tipo": "PictureFill",
              "angulo": round(pf.Angle, 3),
              "contorno": _dump_linea(_qi(pf, D.IFillSymbol).Outline)}
+        # Fondo nulo = trama de 1 bit con el color del relleno. Solo entonces
+        # se vuelcan color y fondo: asi los volcados de RasterFill no cambian.
+        fondo = _qi(pf.BackgroundColor, D.IColor) if pf.BackgroundColor \
+            else None
+        if fondo is not None and fondo.NullColor:
+            d["color"] = _dump_color(_qi(pf, D.IFillSymbol).Color)
+            d["fondo"] = "transparente"
         pic = pf.Picture
         d["tiene_imagen"] = pic is not None
         if pic is not None:
@@ -99,6 +106,18 @@ def _dump_simbolo(sym):
             except Exception:
                 pass
         return d
+
+    # MarkerFillSymbol tambien responde a IFillSymbol: antes que SimpleFill.
+    mf = _qi(sym, D.IMarkerFillSymbol)
+    if mf is not None:
+        prop = _qi(sym, D.IFillProperties)
+        return {"tipo": "MarkerFill",
+                "estilo": "rejilla" if mf.Style == D.esriMFSGrid else mf.Style,
+                "sep_pt": [round(prop.XSeparation, 3),
+                           round(prop.YSeparation, 3)],
+                "desfase_pt": [round(prop.XOffset, 3), round(prop.YOffset, 3)],
+                "marcador": _dump_simbolo(mf.MarkerSymbol),
+                "contorno": _dump_linea(_qi(mf, D.IFillSymbol).Outline)}
 
     lf = _qi(sym, D.ILineFillSymbol)
     if lf is not None:

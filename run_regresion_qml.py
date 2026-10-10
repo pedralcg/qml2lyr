@@ -330,6 +330,148 @@ def caso_opacidad_capa(fallos):
            u"transparencia del .lyr")
 
 
+def caso_opacidad_simbolo(fallos):
+    """(2bis) Opacidad de SIMBOLO igual en todas las clases -> transparencia de
+    capa (por la de capa que ya hubiera); distinta entre clases -> opaco y
+    aviso. Y que ArcMap pinte de verdad el color que pinta QGIS: un relleno
+    al 50 % sobre blanco."""
+    for qml, esperada in ((u"opacidad_simbolo_unico.qml", 80),
+                          (u"opacidad_categorias_igual.qml", 50),
+                          (u"opacidad_categorias_mixta.qml", None)):
+        lyr = _salida(qml.replace(u".qml", u".lyr"))
+        rc, out, err = _lanzar([os.path.join(DIR_QML, qml), SHP_POLIGONOS, lyr])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"%s no convirtio: %r" % (qml, capa))
+            continue
+        _igual(fallos, lyr_dump.dump_lyr(lyr).get("transparencia_pct"),
+               esperada, u"transparencia de %s" % qml)
+    # Render: la clase A (#e41a1c) al 50 % sobre blanco -> (241, 140, 141).
+    # Es la mezcla que hace QGIS y la que tiene que hacer la capa en ArcMap.
+    mezcla = tuple(int(round(255 - 0.5 * (255 - c))) for c in (228, 26, 28))
+    pixeles = _pixeles_de_color(_salida(u"opacidad_categorias_igual.lyr"),
+                                mezcla, _salida(u"opacidad_render.png"),
+                                tolerancia=6)
+    opaco = _pixeles_de_color(_salida(u"opacidad_categorias_igual.lyr"),
+                              (228, 26, 28), _salida(u"opacidad_render2.png"),
+                              tolerancia=6)
+    if pixeles < 1000 or opaco > 0:
+        fallos.append(u"el relleno no sale al 50 %%: %d px de la mezcla "
+                      u"%r, %d px del color opaco" % (pixeles, mezcla, opaco))
+
+
+def _marker_fills(simbolo):
+    """MarkerFill de un simbolo volcado (suelto o dentro de un multicapa)."""
+    capas = simbolo.get("capas") if simbolo.get("tipo") == "MultiLayerFill" \
+        else [simbolo]
+    return [c for c in capas if c.get("tipo") == "MarkerFill"]
+
+
+def caso_relleno_puntos(fallos):
+    """(2ter) PointPatternFill -> MarkerFillSymbol: 2 rejillas con las filas
+    desplazadas, 4 con filas y columnas, cada una con su separacion y desfase,
+    y el borde en el mismo multicapa. Que se dibuja: pixeles del marcador.
+
+    La red de puntos (vectores a los vecinos) se midio por render contra QGIS
+    3.44.12 el 2026-10-10 en cinco configuraciones: identica salvo la fase."""
+    lyr = _salida(u"relleno_puntos.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"relleno_puntos.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"relleno_puntos no convirtio: %r" % capa)
+        return
+    clases = dict((c["valor"], c["simbolo"])
+                  for c in lyr_dump.dump_lyr(lyr)["renderer"]["clases"])
+    d, m = round(2.4 * 2.834645669, 3), round(1.2 * 2.834645669, 3)
+    a = _marker_fills(clases[u"A"])
+    _igual(fallos, sorted((f["sep_pt"], f["desfase_pt"]) for f in a),
+           [([d, round(2 * d, 3)], [0.0, 0.0]), ([d, round(2 * d, 3)], [m, d])],
+           u"rejillas de A")
+    if a:
+        _igual(fallos, (a[0]["estilo"], a[0]["marcador"]["tipo"],
+                        a[0]["marcador"]["color"]["rgb"]),
+               ("rejilla", "SimpleMarker", [51, 160, 44]), u"marcador de A")
+    # El borde (SimpleLine de QGIS, el de encima) es la capa 0 del multicapa.
+    _igual(fallos, clases[u"A"]["capas"][0].get("tipo"), "SimpleFill",
+           u"borde de A delante de las rejillas")
+    _igual(fallos, len(_marker_fills(clases[u"B"])), 4, u"rejillas de B")
+    pixeles = _pixeles_de_color(lyr, (51, 160, 44),
+                                _salida(u"relleno_puntos.png"), tolerancia=30)
+    if pixeles < 500:
+        fallos.append(u"los marcadores de A no se dibujan: %d px" % pixeles)
+
+
+def _cobertura_sobre_rojo(ruta_lyr, rgb, png):
+    """Dibuja el .lyr (poligono A) ENCIMA de un relleno rojo opaco, a 1:1000 y
+    96 dpi (exportando la pagina: con data_frame se ignora la resolucion).
+    -> (fraccion de `rgb`, de rojo y de blanco) en 40 mm del interior.
+    El rojo que asoma es lo que una trama deja ver; el blanco, un fondo que
+    no es transparente."""
+    import arcpy
+    import emisor
+    from modelo import CapaEstilo, Contorno, RendererSimple, SimboloRelleno
+    rojo = _salida(u"fondo_rojo.lyr")
+    if not os.path.exists(rojo):
+        emisor.emitir(CapaEstilo(nombre=u"rojo", renderer=RendererSimple(
+            SimboloRelleno(rgb=(255, 0, 0), style="solid",
+                           contorno=Contorno(style="no")))),
+            SHP_POLIGONOS, rojo, os.path.join(DIR_OUT, u"tmp_rojo"))
+    mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    df.spatialReference = arcpy.SpatialReference(25830)
+    arcpy.mapping.AddLayer(df, arcpy.mapping.Layer(rojo), "BOTTOM")
+    arcpy.mapping.AddLayer(df, arcpy.mapping.Layer(ruta_lyr), "TOP")
+    df.extent = arcpy.Extent(600010, 4200010, 600090, 4200090)
+    df.scale = 1000
+    arcpy.mapping.ExportToPNG(mxd, png, resolution=96)
+    del mxd
+    bandas = arcpy.RasterToNumPyArray(png)
+    r, g, b = [bandas[i].astype("int32") for i in range(3)]
+    del bandas
+    color = (abs(r - rgb[0]) < 20) & (abs(g - rgb[1]) < 20) & \
+        (abs(b - rgb[2]) < 20)
+    fondo = (r > 200) & (g < 60) & (b < 60)
+    blanco = (r > 240) & (g > 240) & (b > 240)
+    import numpy
+    ys, xs = numpy.nonzero(color | fondo)
+    cy, cx, k = int(numpy.median(ys)), int(numpy.median(xs)), 75
+    zona = lambda m: float(m[cy - k:cy + k, cx - k:cx + k].mean())
+    return zona(color), zona(fondo), zona(blanco)
+
+
+def caso_tramas_densas(fallos):
+    """(2quater) Trama `dense5` -> relleno de imagen de 1 bit con el patron de
+    Qt: el color del relleno, el fondo TRANSPARENTE (deja ver la capa roja de
+    debajo, 0 % de blanco) y la cobertura de Qt, 37,5 %. Antes la capa se
+    omitia por `fill style='dense5'`. Y la imagen va DENTRO del .lyr: el
+    temporal del emisor ya no existe cuando se dibuja."""
+    lyr = _salida(u"tramas_densas.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"tramas_densas.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"tramas_densas no convirtio: %r" % capa)
+        return
+    clases = dict((c["valor"], c["simbolo"])
+                  for c in lyr_dump.dump_lyr(lyr)["renderer"]["clases"])
+    a = clases[u"A"]
+    _igual(fallos, (a.get("tipo"), a.get("fondo"),
+                    (a.get("color") or {}).get("rgb")),
+           ("PictureFill", "transparente", [31, 120, 180]), u"dense5")
+    _igual(fallos, [c.get("tipo") for c in clases[u"B"].get("capas") or []],
+           ["SimpleFill", "PictureFill"], u"dense1 bajo el borde")
+    solo_a = _salida(u"tramas_densas_A.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"tramas_densas.qml"),
+                            SHP_POLIGONOS, solo_a, u"--defquery", u"TIPO = 'A'"])
+    azul, rojo, blanco = _cobertura_sobre_rojo(
+        solo_a, (31, 120, 180), _salida(u"tramas_densas.png"))
+    if abs(azul - 0.375) > 0.015 or blanco > 0.001 or rojo < 0.5:
+        fallos.append(u"dense5 sobre rojo: %.1f %% de trama (Qt 37,5), "
+                      u"%.1f %% de rojo, %.1f %% de blanco"
+                      % (100 * azul, 100 * rojo, 100 * blanco))
+
+
 def caso_tilde_posicional(fallos):
     """(3) Nombre y ruta con tilde por el modo posicional: JSON valido y
     exit 0. Antes reventaba con UnicodeDecodeError tras escribir el .lyr."""
@@ -680,9 +822,9 @@ PLANTILLA_MXD = (u"C:\\Program Files (x86)\\ArcGIS\\Desktop10.5\\MapTemplates"
                  u"\\Standard Page Sizes\\ISO (A) Page Sizes\\ISO A3 Landscape.mxd")
 
 
-def _pixeles_de_color(ruta_lyr, rgb, png):
-    """Cuantos pixeles de color `rgb` (+-40 por canal) salen al dibujar el
-    .lyr solo en un mapa estandar, encuadrado en su dato."""
+def _pixeles_de_color(ruta_lyr, rgb, png, tolerancia=40):
+    """Cuantos pixeles de color `rgb` (+-`tolerancia` por canal) salen al
+    dibujar el .lyr solo en un mapa estandar, encuadrado en su dato."""
     import arcpy
     mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
     df = arcpy.mapping.ListDataFrames(mxd)[0]
@@ -695,8 +837,9 @@ def _pixeles_de_color(ruta_lyr, rgb, png):
                               df_export_height=400)
     del mxd
     a = arcpy.RasterToNumPyArray(png).astype("int32")
-    cerca = ((abs(a[0] - rgb[0]) < 40) & (abs(a[1] - rgb[1]) < 40)
-             & (abs(a[2] - rgb[2]) < 40))
+    cerca = ((abs(a[0] - rgb[0]) < tolerancia)
+             & (abs(a[1] - rgb[1]) < tolerancia)
+             & (abs(a[2] - rgb[2]) < tolerancia))
     return int(cerca.sum())
 
 
@@ -1129,6 +1272,39 @@ def _caso_batch_wms(fallos, salida, wms_local):
         fallos.append(u"no avisa de la subcapa que falta: %r" % avisos)
 
 
+QGZ_XYZ = os.path.join(RAIZ, "tests", "fixtures", "xyz_wmts.qgz")
+
+
+def caso_xyz_que_es_wmts(fallos):
+    """(15bis) Una capa XYZ de QGIS cuya URL es un GetTile de WMTS (KVP) sale
+    como .lyr WMTS conectado, con la capa y la matriz de la URL; el XYZ REST y
+    el puro siguen fallando, y el lote sigue. Contra el WMTS local."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    salida = os.path.join(DIR_OUT, "xyz")
+    if os.path.isdir(salida):
+        shutil.rmtree(salida)
+    servidor = wms_local.arrancar()
+    try:
+        rc, out, err = _lanzar([u"--batch", QGZ_XYZ, salida])
+        datos = _json_estricto(out, fallos) or {}
+        por_nombre = dict((c.get("nombre"), c) for c in datos.get("capas") or [])
+        _igual(fallos, dict((n, c.get("ok")) for n, c in por_nombre.items()),
+               {u"XYZ que es WMTS": True, u"WMTS REST como XYZ": False,
+                u"OSM": False}, u"capas convertidas")
+        capa = por_nombre.get(u"XYZ que es WMTS") or {}
+        if capa.get("ok"):
+            _igual(fallos, lyr_dump.dump_lyr(capa["salida"]).get("wmts"),
+                   {u"url": wms_local.URL_WMTS, u"capa": u"mapa",
+                    u"matriz": u"EPSG:25830", u"estilo": u"default",
+                    u"formato": u"image/png"}, u"WMTS desde un XYZ")
+            if not any(u"GetTile de WMTS" in a for a in capa.get("avisos") or []):
+                fallos.append(u"sin el aviso del XYZ: %r" % capa.get("avisos"))
+    finally:
+        servidor.shutdown()
+
+
 QGZ_MXD = os.path.join(RAIZ, "tests", "fixtures", "proyecto_mxd.qgz")
 
 
@@ -1190,6 +1366,85 @@ def caso_modo_mxd(fallos):
            u"no sobrescribe un .mxd existente")
 
 
+QGZ_MXD_WMS = os.path.join(RAIZ, "tests", "fixtures", "mxd_wms.qgz")
+
+#: Arbol del MXD reabierto para cada valor de --agrupar-wms (ver el
+#: generador `qgz_mxd_wms`). Sin la opcion, el de siempre: una capa por capa.
+ARBOL_MXD_WMS = {
+    None: [u"x Ortofotos", u"x Ortofotos\\Parcelas", u"- Ortofotos\\Textos",
+           u"x Ortofotos\\Zonas", u"- Ortofotos\\Masas", u"x Base",
+           u"x Base\\Parcelas al 50", u"- Base\\Masas base",
+           u"- Base\\Textos base", u"- Historico", u"x Historico\\Textos hist"],
+    u"grupo": [u"x Ortofotos", u"x Ortofotos\\Parcelas (+2 del mismo WMS)",
+               u"x Ortofotos\\Zonas", u"x Base", u"x Base\\Parcelas al 50",
+               u"- Base\\Masas base (+1 del mismo WMS)", u"- Historico",
+               u"x Historico\\Textos hist"],
+    u"proyecto": [u"x Ortofotos", u"x Ortofotos\\Parcelas (+5 del mismo WMS)",
+                  u"x Ortofotos\\Zonas", u"x Base", u"x Base\\Parcelas al 50"],
+}
+
+
+def caso_mxd_agrupar_wms(fallos):
+    """(18bis) --agrupar-wms: las capas WMS del mismo servicio, misma opacidad
+    y mismas escalas van en UNA capa de ArcMap (cada WMS arrastra el catalogo
+    entero y pide su GetCapabilities al abrir el MXD). "grupo" junta solo
+    hermanas y el arbol no cambia; "proyecto" las junta todas donde estaba la
+    primera. Encendidas: las subcapas de las capas visibles; si no habia
+    ninguna, todas y la capa apagada. Sin la opcion, el MXD de siempre."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    carpeta = os.path.join(DIR_OUT, u"mxd_wms")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    servidor = wms_local.arrancar()
+    try:
+        for modo in (None, u"grupo", u"proyecto"):
+            mxd = os.path.join(carpeta, u"%s.mxd" % (modo or u"sin"))
+            argv = [u"--mxd", QGZ_MXD_WMS, mxd]
+            if modo:
+                argv += [u"--agrupar-wms", modo]
+            rc, out, err = _lanzar(argv)
+            datos = _json_estricto(out, fallos) or {}
+            if not datos.get("ok"):
+                fallos.append(u"%s: el MXD fallo: %r / %s" % (
+                    modo, datos.get("error"), err.decode("utf-8", "replace")[:300]))
+                continue
+            _igual(fallos, datos["verificacion"]["arbol"], ARBOL_MXD_WMS[modo],
+                   u"arbol con agrupar_wms=%s" % modo)
+            if modo is None:
+                _igual(fallos, "agrupadas" in datos, False,
+                       u"sin la opcion no se agrupa nada")
+                continue
+            agrupadas = dict((a["nombre"], a) for a in datos["agrupadas"])
+            encendidas = dict(
+                (n, (lyr_dump.dump_lyr(a["salida"]).get("wms") or {})
+                 .get("encendidas")) for n, a in agrupadas.items())
+            if modo == u"grupo":
+                _igual(fallos, encendidas, {
+                    u"Parcelas (+2 del mismo WMS)": [u"parcelas"],
+                    # Ninguna estaba encendida: todas, y la capa apagada.
+                    u"Masas base (+1 del mismo WMS)": [u"textos", u"masas"]},
+                    u"subcapas encendidas (grupo)")
+            else:
+                _igual(fallos, encendidas, {
+                    u"Parcelas (+5 del mismo WMS)": [u"parcelas"]},
+                    u"subcapas encendidas (proyecto)")
+                _igual(fallos, [o["motivo"] for o in datos["omitidas"]],
+                       [u"sus capas WMS van en una capa agrupada de otro "
+                        u"grupo"], u"el grupo que se vacia")
+            if not any(u"juntas en una" in a for a in datos["avisos"]):
+                fallos.append(u"%s: sin el aviso de la agrupacion: %r"
+                              % (modo, datos["avisos"]))
+        rc, out, err = _lanzar([u"--batch", QGZ_MXD_WMS,
+                                os.path.join(carpeta, u"lote"),
+                                u"--agrupar-wms", u"grupo"])
+        if rc == 0:
+            fallos.append(u"--agrupar-wms fuera de --mxd deberia rechazarse")
+    finally:
+        servidor.shutdown()
+
+
 def caso_args_json_plugin(fallos):
     """(20) Las dos vias nuevas del plugin por --args-json: una capa WMS viva
     (`servicio` = su `source()`, sin `dato`) y el proyecto entero a .mxd
@@ -1243,7 +1498,10 @@ def caso_args_json_plugin(fallos):
              u"qgz"),
             (u"clave de otro modo", {u"modo": u"mxd", u"qgz": u"x.qgz",
                                      u"salida": u"x.mxd", u"dato": u"a"},
-             u"dato")):
+             u"dato"),
+            (u"agrupar raro", {u"modo": u"mxd", u"qgz": u"x.qgz",
+                               u"salida": u"x.mxd", u"agrupar_wms": u"todo"},
+             u"agrupar_wms")):
         rc, out, err = _lanzar([u"--args-json",
                                 _escribir_args(u"args_malo.json", args)])
         error = ((_json_estricto(out, fallos) or {}).get("error") or u"")
@@ -1321,6 +1579,9 @@ CASOS = [
     ("defquery_args_json", caso_defquery_args_json),
     ("defquery_posicional", caso_defquery_posicional),
     ("opacidad_capa", caso_opacidad_capa),
+    ("opacidad_simbolo", caso_opacidad_simbolo),
+    ("relleno_puntos", caso_relleno_puntos),
+    ("tramas_densas", caso_tramas_densas),
     ("tilde_posicional", caso_tilde_posicional),
     ("tilde_args_json", caso_tilde_args_json),
     ("raster_alfa0", caso_raster_alfa0),
@@ -1340,7 +1601,9 @@ CASOS = [
     ("batch_sintetico", caso_batch_sintetico),
     ("batch_remap", caso_batch_remap),
     ("batch_wms", caso_batch_wms),
+    ("xyz_que_es_wmts", caso_xyz_que_es_wmts),
     ("modo_mxd", caso_modo_mxd),
+    ("mxd_agrupar_wms", caso_mxd_agrupar_wms),
     ("args_json_plugin", caso_args_json_plugin),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]

@@ -36,14 +36,14 @@ estilo por defecto.
 | | |
 |---|---|
 | **Renderers** | símbolo único, categorizado (también por la concatenación de 2 o 3 campos), graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
-| **Relleno** | sólido, hueco, tramado (6 patrones), multicapa, relleno con imagen |
+| **Relleno** | sólido, hueco, tramado (6 patrones), tramas densas (`dense1-7`), multicapa, relleno con imagen, relleno de puntos (también con filas o columnas desplazadas) |
 | **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot` |
 | **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
-| **Capa** | definition query, opacidad, visibilidad por escala |
+| **Capa** | definition query, opacidad de capa (y la de símbolo cuando es la misma en todas las clases), visibilidad por escala |
 | **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
 | **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
-| **Servicios** | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
+| **Servicios** | WMS (con las subcapas que pide QGIS encendidas) y WMTS, también el que QGIS carga como XYZ con una URL `GetTile` |
 | **Proyecto** | el `.qgz` entero a un `.mxd`: grupos, orden, visibilidad, SRC y extensión (plugin y `--mxd`) |
 
 Lo que **no** convierte (etiquetado por reglas, expresiones, propiedades
@@ -72,7 +72,7 @@ El motor también se usa sin QGIS, desde la línea de comandos:
 ```
 C:\Python27\ArcGIS10.5\python.exe src\emisor.py <estilo.qml> <dato> <salida.lyr> [--defquery "..."]
 C:\Python27\ArcGIS10.5\python.exe src\emisor.py --batch <proyecto.qgz> <carpeta_salida>
-C:\Python27\ArcGIS10.5\python.exe src\emisor.py --mxd <proyecto.qgz> <salida.mxd> [--plantilla <x.mxd>]
+C:\Python27\ArcGIS10.5\python.exe src\emisor.py --mxd <proyecto.qgz> <salida.mxd> [--plantilla <x.mxd>] [--agrupar-wms grupo|proyecto]
 ```
 
 El modo `--mxd` monta el proyecto entero en un `.mxd`: las mismas capas, en el
@@ -81,7 +81,9 @@ de QGIS, con el SRC y la extensión del proyecto y rutas relativas. Parte de la
 plantilla ISO A3 horizontal de ArcGIS (o de la que se le pase), deja los `.lyr`
 de cada capa en `<salida>_lyr/` y **no sobrescribe** un `.mxd` que ya exista.
 Lo que no sabe convertir lo omite y lo lista con su motivo, y al terminar
-**reabre** el `.mxd` para comprobar que tiene lo que se puso.
+**reabre** el `.mxd` para comprobar que tiene lo que se puso. Con
+`--agrupar-wms` junta en una sola capa las WMS del mismo servicio (cada una
+arrastra en ArcMap el catálogo entero y pide su `GetCapabilities` al abrir).
 
 El modo `--batch` convierte todas las capas de un proyecto. Una capa que falla
 se informa y se salta; el lote sigue.
