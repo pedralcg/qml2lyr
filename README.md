@@ -43,7 +43,7 @@ estilo por defecto.
 | **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
 | **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
-| **Servicios** | WMS (con las subcapas que pide QGIS encendidas) y WMTS |
+| **Servicios** | WMS (con las subcapas que pide QGIS encendidas) y WMTS, también el que QGIS carga como XYZ con una URL `GetTile` |
 | **Proyecto** | el `.qgz` entero a un `.mxd`: grupos, orden, visibilidad, SRC y extensión (plugin y `--mxd`) |
 
 Lo que **no** convierte (etiquetado por reglas, expresiones, propiedades

@@ -65,7 +65,19 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   `WMTSLayer` con la capa, la **matriz de teselas**, el estilo y el formato que
   pide QGIS. Necesita red, como el WMS. Probado con el `mapa-raster` del IGN.
 - **Teselas XYZ**: se rechazan diciendo qué son (ArcMap 10.5 no tiene ese tipo
-  de capa).
+  de capa). **Excepción (2026-10-10)**: un XYZ cuya URL es un `GetTile` de
+  **WMTS en forma KVP** (`…?SERVICE=WMTS&REQUEST=GetTile&LAYER=…&TILEMATRIXSET=…`,
+  como se suele cargar el PNOA del IGN) se emite como **capa WMTS** contra la
+  URL base, con la capa, la matriz, el estilo y el formato de la URL, y se avisa.
+  Con el PNOA del IGN, el WMTS **conecta** en ArcMap 10.5; que se vea la imagen
+  falta comprobarlo a mano (un export standalone de arcpy no dibuja ningún
+  WMTS, tampoco el de la v0.2.0). La forma **REST**
+  (`…/wmts/1.0.0/capa/estilo/matriz/{z}/{y}/{x}.jpg`) no dice dónde está el
+  `GetCapabilities`: se rechaza con la pista de cargarla en QGIS como WMTS.
+  Caso que lo motivó y que **no** se arregla así: las dos capas de Sentinel-2
+  cloudless de **EOX**. La KVP (`s2maps-tiles.eu`) solo responde con una
+  cabecera `Referer`; sin ella da 403, también a ArcMap, que no puede conectar
+  (medido el 2026-10-10). La REST (`tiles.maps.eox.at`) no responde.
 - **GeoPackage**: **sí se convierte** desde 2026-09-20. arcpy 10.5 abre la capa
   como `ruta.gpkg\main.<layername>` (verificado con `MakeFeatureLayer` y con una
   emisión completa a `.lyr`). Requisito: que el origen de la capa en QGIS diga

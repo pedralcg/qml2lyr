@@ -1272,6 +1272,39 @@ def _caso_batch_wms(fallos, salida, wms_local):
         fallos.append(u"no avisa de la subcapa que falta: %r" % avisos)
 
 
+QGZ_XYZ = os.path.join(RAIZ, "tests", "fixtures", "xyz_wmts.qgz")
+
+
+def caso_xyz_que_es_wmts(fallos):
+    """(15bis) Una capa XYZ de QGIS cuya URL es un GetTile de WMTS (KVP) sale
+    como .lyr WMTS conectado, con la capa y la matriz de la URL; el XYZ REST y
+    el puro siguen fallando, y el lote sigue. Contra el WMTS local."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    salida = os.path.join(DIR_OUT, "xyz")
+    if os.path.isdir(salida):
+        shutil.rmtree(salida)
+    servidor = wms_local.arrancar()
+    try:
+        rc, out, err = _lanzar([u"--batch", QGZ_XYZ, salida])
+        datos = _json_estricto(out, fallos) or {}
+        por_nombre = dict((c.get("nombre"), c) for c in datos.get("capas") or [])
+        _igual(fallos, dict((n, c.get("ok")) for n, c in por_nombre.items()),
+               {u"XYZ que es WMTS": True, u"WMTS REST como XYZ": False,
+                u"OSM": False}, u"capas convertidas")
+        capa = por_nombre.get(u"XYZ que es WMTS") or {}
+        if capa.get("ok"):
+            _igual(fallos, lyr_dump.dump_lyr(capa["salida"]).get("wmts"),
+                   {u"url": wms_local.URL_WMTS, u"capa": u"mapa",
+                    u"matriz": u"EPSG:25830", u"estilo": u"default",
+                    u"formato": u"image/png"}, u"WMTS desde un XYZ")
+            if not any(u"GetTile de WMTS" in a for a in capa.get("avisos") or []):
+                fallos.append(u"sin el aviso del XYZ: %r" % capa.get("avisos"))
+    finally:
+        servidor.shutdown()
+
+
 QGZ_MXD = os.path.join(RAIZ, "tests", "fixtures", "proyecto_mxd.qgz")
 
 
@@ -1568,6 +1601,7 @@ CASOS = [
     ("batch_sintetico", caso_batch_sintetico),
     ("batch_remap", caso_batch_remap),
     ("batch_wms", caso_batch_wms),
+    ("xyz_que_es_wmts", caso_xyz_que_es_wmts),
     ("modo_mxd", caso_modo_mxd),
     ("mxd_agrupar_wms", caso_mxd_agrupar_wms),
     ("args_json_plugin", caso_args_json_plugin),

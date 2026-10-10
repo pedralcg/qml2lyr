@@ -805,6 +805,41 @@ def qgz_mxd_wms():
         servidor.shutdown()
 
 
+def qgz_xyz_wmts():
+    """Capas XYZ, escritas por QGIS sin conectarse (XYZ no lee nada al crear
+    la capa): un GetTile KVP contra el WMTS local, un WMTS en forma REST (la
+    de EOX) y un XYZ puro (OSM). Solo servicios locales o que no se llegan a
+    pedir: la regresion no depende de la red. El PNOA del IGN cargado como
+    XYZ esta en `tests/test_parser.py`, con el origen tal como lo escribio
+    QGIS 3.44.12."""
+    from urllib.parse import quote
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    proyecto = QgsProject.instance()
+    proyecto.clear()
+    casos = (
+        ("XYZ que es WMTS", wms_local.URL_WMTS + "?SERVICE=WMTS&REQUEST="
+         "GetTile&VERSION=1.0.0&LAYER=mapa&STYLE=default&FORMAT=image/png&"
+         "TILEMATRIXSET=EPSG:25830&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"),
+        ("WMTS REST como XYZ", "http://a.tiles.maps.eox.at/wmts/1.0.0/"
+         "s2cloudless_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg"),
+        ("OSM", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"))
+    for nombre, url in casos:
+        capa = QgsRasterLayer("type=xyz&url=%s&zmax=19&zmin=0"
+                              % quote(url, safe=":/"), nombre, "wms")
+        if not capa.isValid():
+            sys.exit("capa XYZ no valida: %s" % nombre)
+        proyecto.addMapLayer(capa)
+    metadatos = proyecto.metadata()
+    metadatos.setAuthor("qml2lyr tests")
+    proyecto.setMetadata(metadatos)
+    salida = os.path.join(DIR_FIX, "xyz_wmts.qgz")
+    if not proyecto.write(salida):
+        sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+    proyecto.clear()
+    print("escrito", salida)
+
+
 def qml_wms_capa_viva():
     """Capa WMS viva, como la ve el plugin: su .qml (`saveNamedStyle`, que no
     lleva el origen) y su `layer.source()`, que el plugin pasa aparte."""
@@ -856,6 +891,7 @@ GENERADORES = {
     "batch_wms": qgz_batch_wms,
     "proyecto_mxd": qgz_proyecto_mxd,
     "mxd_wms": qgz_mxd_wms,
+    "xyz_wmts": qgz_xyz_wmts,
     "wms_capa_viva": qml_wms_capa_viva,
 }
 

@@ -29,6 +29,7 @@ DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
 QGZ_BATCH = os.path.join(RAIZ, "tests", "fixtures", "batch_sintetico.qgz")
 QGZ_REMAP = os.path.join(RAIZ, "tests", "fixtures", "batch_remap.qgz")
 QGZ_WMS = os.path.join(RAIZ, "tests", "fixtures", "batch_wms.qgz")
+QGZ_XYZ = os.path.join(RAIZ, "tests", "fixtures", "xyz_wmts.qgz")
 MM2PT = 2.834645669
 
 
@@ -409,6 +410,50 @@ def test_wms(fallos):
         u"format=image/png&layers=a&styles=raro&url=http://x/wms"))[0]
     if not any(u"raro" in a for a in capa.avisos):
         fallos.append(u"no avisa del estilo WMS: %s" % capa.avisos)
+
+
+def test_xyz_que_es_wmts(fallos):
+    """QGIS 3.44.12: un XYZ cuya URL es un GetTile de WMTS (forma KVP) sale
+    como capa WMTS; uno REST o uno puro se siguen rechazando, el REST con la
+    pista de cargarlo en QGIS como WMTS."""
+    capas = {}
+    for ml in parser_qgis._raiz_qgs(QGZ_XYZ).iter("maplayer"):
+        try:
+            capas[ml.findtext("layername")] = parser_qgis.parse_maplayer(ml)[0]
+        except SimbologiaNoSoportada as e:
+            capas[ml.findtext("layername")] = unicode(e)
+    s = getattr(capas.get(u"XYZ que es WMTS"), "servicio", None)
+    _igual(fallos, (type(s).__name__, getattr(s, "url", None),
+                    getattr(s, "capa", None), getattr(s, "matriz", None),
+                    getattr(s, "estilo", None), getattr(s, "formato", None)),
+           (u"ServicioWMTS", u"http://127.0.0.1:8765/wmts", u"mapa",
+            u"EPSG:25830", u"default", u"image/png"), u"GetTile KVP como XYZ")
+    rest = capas.get(u"WMTS REST como XYZ")
+    if not isinstance(rest, unicode) or u"forma REST" not in rest:
+        fallos.append(u"el REST deberia rechazarse con la pista: %r" % rest)
+    osm = capas.get(u"OSM")
+    if not isinstance(osm, unicode) or u"REST" in osm:
+        fallos.append(u"OSM deberia rechazarse sin la pista: %r" % osm)
+
+    # El PNOA del IGN cargado como XYZ: origen literal escrito por QGIS
+    # 3.44.12 (2026-10-10). Convertido, el WMTS conecta en ArcMap 10.5. Que
+    # pinta queda para el QA a mano: un export standalone de arcpy no dibuja
+    # ningun WMTS, tampoco el del IGN de la v0.2.0 (control del mismo dia).
+    import xml.etree.ElementTree as ET
+    ml = ET.Element("maplayer")
+    ET.SubElement(ml, "layername").text = u"PNOA"
+    ET.SubElement(ml, "provider").text = u"wms"
+    ET.SubElement(ml, "datasource").text = (
+        u"type=xyz&url=https://www.ign.es/wmts/pnoa-ma%3Frequest%3DGetTile%26"
+        u"service%3DWMTS%26VERSION%3D1.0.0%26Layer%3DOI.OrthoimageCoverage%26"
+        u"Style%3Ddefault%26Format%3Dimage/jpeg%26TileMatrixSet%3D"
+        u"GoogleMapsCompatible%26TileMatrix%3D%7Bz%7D%26TileRow%3D%7By%7D%26"
+        u"TileCol%3D%7Bx%7D&zmax=19&zmin=0")
+    s = parser_qgis.parse_maplayer(ml)[0].servicio
+    _igual(fallos, (s.url, s.capa, s.matriz, s.estilo, s.formato),
+           (u"https://www.ign.es/wmts/pnoa-ma", u"OI.OrthoimageCoverage",
+            u"GoogleMapsCompatible", u"default", u"image/jpeg"),
+           u"PNOA del IGN como XYZ")
 
 
 def test_etiquetas(fallos):

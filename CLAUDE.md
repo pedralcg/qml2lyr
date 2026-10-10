@@ -155,7 +155,9 @@ Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado),
 **RGB** (`multibandcolor`: bandas, alfa, sin realce o estirado mín-máx por banda).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
 Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr` con
-`WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza.
+`WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza, salvo que su
+URL sea un `GetTile` KVP de WMTS (`parser_qgis._wmts_desde_gettile`): entonces
+es un WMTS contra la URL base.
 
 ## Gotchas críticos (no redescubrir)
 

@@ -1943,17 +1943,55 @@ def _servicio_wms(maplayer_elem, nombre, avisos):
                                      nombre, avisos)
 
 
+def _wmts_desde_gettile(url):
+    """URL de teselas XYZ que es en realidad un GetTile de WMTS en forma KVP
+    (`...?SERVICE=WMTS&REQUEST=GetTile&LAYER=...&TILEMATRIXSET=...&
+    TileMatrix={z}...`) -> ServicioWMTS contra la URL base; None si no lo es.
+
+    Es una forma habitual de cargar un WMTS en QGIS como XYZ (el PNOA del IGN
+    circula asi). Solo se reconoce la forma KVP: lleva servicio, capa y
+    matriz por su nombre. La REST (`.../wmts/1.0.0/capa/estilo/matriz/{z}/
+    {y}/{x}.jpg`) no dice donde esta el GetCapabilities y no se adivina."""
+    base, _, consulta = (url or u"").partition(u"?")
+    if not consulta:
+        return None
+    params = dict((k.lower(), v) for k, v in
+                  (trozo.partition(u"=")[::2] for trozo in consulta.split(u"&"))
+                  if k)
+    if params.get(u"service", u"").upper() != u"WMTS" or \
+            params.get(u"request", u"").lower() != u"gettile" or \
+            not params.get(u"layer") or not params.get(u"tilematrixset"):
+        return None
+    return ServicioWMTS(url=base, capa=params[u"layer"],
+                        matriz=params[u"tilematrixset"],
+                        estilo=params.get(u"style") or None,
+                        formato=params.get(u"format") or None)
+
+
 def servicio_desde_datasource(datasource, nombre, avisos):
     """Origen de datos del proveedor `wms` de QGIS (el `<datasource>` del
     .qgs o el `layer.source()` de la capa viva) -> ServicioWMS o ServicioWMTS
-    (el mismo proveedor sirve los dos); SimbologiaNoSoportada si es un XYZ."""
+    (el mismo proveedor sirve los dos); SimbologiaNoSoportada si es un XYZ
+    (salvo que su URL sea un GetTile de WMTS, ver `_wmts_desde_gettile`)."""
     pares = _parametros_uri(datasource)
     params = dict(pares)
     url = params.get(u"url")
     if params.get(u"type") == u"xyz":
+        wmts = _wmts_desde_gettile(url)
+        if wmts is not None:
+            avisos.append(
+                u"'%s' es una capa XYZ de QGIS, pero su URL es un GetTile de "
+                u"WMTS: se emite como capa WMTS (capa %s, matriz %s) contra "
+                u"el GetCapabilities de %s" % (nombre, wmts.capa, wmts.matriz,
+                                                wmts.url))
+            return wmts
+        pista = u""
+        if u"wmts" in (url or u"").lower():
+            pista = (u". Su URL parece un WMTS en forma REST, de la que no se "
+                     u"deduce el GetCapabilities: anadela en QGIS como WMTS")
         raise SimbologiaNoSoportada(
             u"'%s' es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
-            u"tipo de capa para ellas" % (nombre, url))
+            u"tipo de capa para ellas%s" % (nombre, url, pista))
     if not url:
         raise SimbologiaNoSoportada(u"capa WMS '%s' sin url= en el origen de "
                                     u"datos" % nombre)
