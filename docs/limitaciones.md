@@ -139,6 +139,16 @@ símbolo más fiel posible y **avisa** de la pérdida:
   pueden salir corridos; el dibujo es el mismo) y por tanto tampoco el
   `offset`; la **desviación aleatoria**, el **giro** del patrón y los modos de
   **recorte** distintos del de por defecto. Todos se avisan.
+- **Tramas `dense1`–`dense7`** (desde el 2026-10-10): son pinceles de Qt, un
+  mapa de bits de 8×8 en **píxeles de dispositivo**. Se emiten como relleno de
+  imagen con **el mismo mapa de bits**, pintado del color del relleno y con el
+  **fondo transparente** (deja ver lo de debajo). Medido por render contra QGIS
+  3.44: la cobertura coincide a 96 y a 300 dpi (`dense5`: 37,5 % en los dos) y a
+  96 dpi el dibujo es el mismo píxel a píxel. La diferencia, que se avisa: al
+  exportar a más resolución QGIS **afina** la trama (sigue siendo de 1 píxel de
+  dispositivo) y ArcMap conserva el **grano de pantalla**; la cobertura es la
+  misma. (La rejilla de puntos que se probó antes da en pantalla saltos de
+  14 / 39 / 76 / 100 % de cobertura y se descartó.)
 - **Offset del tramado** (`LinePatternFill` con `offset` ≠ 0): `ILineFillSymbol`
   no desplaza el patrón; se dibuja sin ese desplazamiento. Se avisa desde el
   2026-09-21 (antes se perdía mudo; hay casos reales con `offset=1.5`).

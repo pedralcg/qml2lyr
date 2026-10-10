@@ -122,12 +122,16 @@ class SimboloImagen(_Simbolo):
     """
 
     def __init__(self, imagen_bytes, formato="png", ancho_pt=0.0, angulo=0.0,
-                 contorno=None):
+                 contorno=None, color=None):
         self.imagen_bytes = imagen_bytes
         self.formato = formato
         self.ancho_pt = ancho_pt
         self.angulo = angulo
         self.contorno = contorno or Contorno(style="no")
+        # Solo para un BMP de 1 bit (las tramas `dense` de QGIS): (r, g, b) de
+        # los pixeles a 1; los pixeles a 0 (el fondo) salen TRANSPARENTES.
+        # None = la imagen con sus propios colores (RasterFill).
+        self.color = color
 
 
 class SimboloRellenoMarcadores(_Simbolo):

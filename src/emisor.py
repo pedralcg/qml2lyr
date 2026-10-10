@@ -198,7 +198,14 @@ def _simbolo_imagen(simbolo):
     pf.CreateFillSymbolFromFile(getattr(D, tipo_nombre), ruta)
     if simbolo.angulo:
         pf.Angle = float(simbolo.angulo)
-    _qi_exig(pf, D.IFillSymbol).Outline = _contorno(simbolo.contorno)
+    relleno = _qi_exig(pf, D.IFillSymbol)
+    if getattr(simbolo, "color", None) is not None:
+        # BMP de 1 bit (trama `dense`): IFillSymbol.Color pinta los pixeles a
+        # 1 y un BackgroundColor nulo deja los pixeles a 0 transparentes.
+        # Medido por render el 2026-10-10 sobre una capa roja: 0 % de blanco.
+        relleno.Color = _color(simbolo.color)
+        pf.BackgroundColor = _color(_HUECO_RGB, alpha=0)
+    relleno.Outline = _contorno(simbolo.contorno)
     return pf
 
 

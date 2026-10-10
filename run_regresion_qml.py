@@ -402,6 +402,76 @@ def caso_relleno_puntos(fallos):
         fallos.append(u"los marcadores de A no se dibujan: %d px" % pixeles)
 
 
+def _cobertura_sobre_rojo(ruta_lyr, rgb, png):
+    """Dibuja el .lyr (poligono A) ENCIMA de un relleno rojo opaco, a 1:1000 y
+    96 dpi (exportando la pagina: con data_frame se ignora la resolucion).
+    -> (fraccion de `rgb`, de rojo y de blanco) en 40 mm del interior.
+    El rojo que asoma es lo que una trama deja ver; el blanco, un fondo que
+    no es transparente."""
+    import arcpy
+    import emisor
+    from modelo import CapaEstilo, Contorno, RendererSimple, SimboloRelleno
+    rojo = _salida(u"fondo_rojo.lyr")
+    if not os.path.exists(rojo):
+        emisor.emitir(CapaEstilo(nombre=u"rojo", renderer=RendererSimple(
+            SimboloRelleno(rgb=(255, 0, 0), style="solid",
+                           contorno=Contorno(style="no")))),
+            SHP_POLIGONOS, rojo, os.path.join(DIR_OUT, u"tmp_rojo"))
+    mxd = arcpy.mapping.MapDocument(PLANTILLA_MXD)
+    df = arcpy.mapping.ListDataFrames(mxd)[0]
+    df.spatialReference = arcpy.SpatialReference(25830)
+    arcpy.mapping.AddLayer(df, arcpy.mapping.Layer(rojo), "BOTTOM")
+    arcpy.mapping.AddLayer(df, arcpy.mapping.Layer(ruta_lyr), "TOP")
+    df.extent = arcpy.Extent(600010, 4200010, 600090, 4200090)
+    df.scale = 1000
+    arcpy.mapping.ExportToPNG(mxd, png, resolution=96)
+    del mxd
+    bandas = arcpy.RasterToNumPyArray(png)
+    r, g, b = [bandas[i].astype("int32") for i in range(3)]
+    del bandas
+    color = (abs(r - rgb[0]) < 20) & (abs(g - rgb[1]) < 20) & \
+        (abs(b - rgb[2]) < 20)
+    fondo = (r > 200) & (g < 60) & (b < 60)
+    blanco = (r > 240) & (g > 240) & (b > 240)
+    import numpy
+    ys, xs = numpy.nonzero(color | fondo)
+    cy, cx, k = int(numpy.median(ys)), int(numpy.median(xs)), 75
+    zona = lambda m: float(m[cy - k:cy + k, cx - k:cx + k].mean())
+    return zona(color), zona(fondo), zona(blanco)
+
+
+def caso_tramas_densas(fallos):
+    """(2quater) Trama `dense5` -> relleno de imagen de 1 bit con el patron de
+    Qt: el color del relleno, el fondo TRANSPARENTE (deja ver la capa roja de
+    debajo, 0 % de blanco) y la cobertura de Qt, 37,5 %. Antes la capa se
+    omitia por `fill style='dense5'`. Y la imagen va DENTRO del .lyr: el
+    temporal del emisor ya no existe cuando se dibuja."""
+    lyr = _salida(u"tramas_densas.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"tramas_densas.qml"),
+                            SHP_POLIGONOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"tramas_densas no convirtio: %r" % capa)
+        return
+    clases = dict((c["valor"], c["simbolo"])
+                  for c in lyr_dump.dump_lyr(lyr)["renderer"]["clases"])
+    a = clases[u"A"]
+    _igual(fallos, (a.get("tipo"), a.get("fondo"),
+                    (a.get("color") or {}).get("rgb")),
+           ("PictureFill", "transparente", [31, 120, 180]), u"dense5")
+    _igual(fallos, [c.get("tipo") for c in clases[u"B"].get("capas") or []],
+           ["SimpleFill", "PictureFill"], u"dense1 bajo el borde")
+    solo_a = _salida(u"tramas_densas_A.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"tramas_densas.qml"),
+                            SHP_POLIGONOS, solo_a, u"--defquery", u"TIPO = 'A'"])
+    azul, rojo, blanco = _cobertura_sobre_rojo(
+        solo_a, (31, 120, 180), _salida(u"tramas_densas.png"))
+    if abs(azul - 0.375) > 0.015 or blanco > 0.001 or rojo < 0.5:
+        fallos.append(u"dense5 sobre rojo: %.1f %% de trama (Qt 37,5), "
+                      u"%.1f %% de rojo, %.1f %% de blanco"
+                      % (100 * azul, 100 * rojo, 100 * blanco))
+
+
 def caso_tilde_posicional(fallos):
     """(3) Nombre y ruta con tilde por el modo posicional: JSON valido y
     exit 0. Antes reventaba con UnicodeDecodeError tras escribir el .lyr."""
@@ -1396,6 +1466,7 @@ CASOS = [
     ("opacidad_capa", caso_opacidad_capa),
     ("opacidad_simbolo", caso_opacidad_simbolo),
     ("relleno_puntos", caso_relleno_puntos),
+    ("tramas_densas", caso_tramas_densas),
     ("tilde_posicional", caso_tilde_posicional),
     ("tilde_args_json", caso_tilde_args_json),
     ("raster_alfa0", caso_raster_alfa0),

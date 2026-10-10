@@ -150,6 +150,25 @@ def qml_relleno_puntos():
     _guardar_qml(capa, "relleno_puntos.qml")
 
 
+def qml_tramas_densas():
+    """Tramas `denseN`, como los casos reales que se perdian: A `dense5` con
+    borde del mismo color (Humedales), B `dense1` debajo de un relleno
+    transparente con borde (el simbolo de dos capas del DPMT)."""
+    from qgis.core import QgsSimpleFillSymbolLayer
+    denso5 = QgsFillSymbol.createSimple(
+        {"style": "dense5", "color": "#1f78b4", "outline_color": "#1f78b4",
+         "outline_width": "0.86"})
+    denso1 = QgsSimpleFillSymbolLayer(QColor("#2ca05f"), Qt.Dense1Pattern,
+                                      QColor("#1f78b4"), Qt.SolidLine, 0.86)
+    borde = QgsSimpleFillSymbolLayer(QColor(31, 120, 180, 0), Qt.SolidPattern,
+                                     QColor("#1f78b4"), Qt.SolidLine, 0.66)
+    capa = _vectorial("poligonos.shp", "Tramas densas")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", denso5, "Humedal"),
+        QgsRendererCategory("B", QgsFillSymbol([denso1, borde]), "DPMT")]))
+    _guardar_qml(capa, "tramas_densas.qml")
+
+
 def qml_linea_dash_dot():
     """Trazo `dash dot`: QGIS escribe el estilo con ESPACIOS. Ancho 0,4 mm
     (1,13 pt), por debajo del umbral en el que ArcMap dibuja el patron
@@ -749,6 +768,7 @@ GENERADORES = {
     "poligono_opacidad_50": qml_poligono_opacidad_50,
     "opacidad_simbolo": qml_opacidad_simbolo,
     "relleno_puntos": qml_relleno_puntos,
+    "tramas_densas": qml_tramas_densas,
     "linea_dash_dot": qml_linea_dash_dot,
     "raster_paleta_alfa0": qml_raster_paleta_alfa0,
     "punto_angulo_escalas": qml_punto_angulo_escalas,

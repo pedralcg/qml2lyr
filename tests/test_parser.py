@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(RAIZ, "src"))
 import parser_qgis  # noqa: E402
 from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
                     SimboloMultiCapa, SimboloRelleno, SimboloRellenoMarcadores,
+                    SimboloImagen,
                     RendererValoresUnicos, SimbologiaNoSoportada)
 
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
@@ -126,6 +127,49 @@ def test_relleno_puntos(fallos):
     for texto in (u"4 rejillas", u"offset 5.4"):
         if not any(texto in a for a in capa.avisos):
             fallos.append(u"falta el aviso '%s': %r" % (texto, capa.avisos))
+
+
+def _pixeles_bmp_1bit(datos):
+    """BMP de 1 bit -> filas de 0/1 (de arriba abajo)."""
+    import struct
+    inicio = struct.unpack("<I", datos[10:14])[0]
+    ancho, alto = struct.unpack("<ii", datos[18:26])
+    por_fila = ((ancho + 31) // 32) * 4
+    filas = []
+    for y in range(alto):
+        crudo = datos[inicio + y * por_fila:inicio + (y + 1) * por_fila]
+        bits = u"".join(u"{0:08b}".format(ord(b) if isinstance(b, str) else b)
+                        for b in crudo)
+        filas.append([int(c) for c in bits[:ancho]])
+    return list(reversed(filas))
+
+
+def test_tramas_densas(fallos):
+    """QGIS 3.44.12: `denseN` -> relleno de imagen (BMP de 1 bit con el patron
+    de Qt) del color del relleno; la cobertura de cada nivel es la de Qt."""
+    capa = _qml("tramas_densas.qml")[0]
+    por_valor = dict((c.valor, c.simbolo) for c in capa.renderer.clases)
+    a = por_valor[u"A"]
+    if not isinstance(a, SimboloImagen):
+        fallos.append(u"dense5 deberia ser SimboloImagen: %r" % a)
+    else:
+        _igual(fallos, (a.formato, a.color, a.contorno.style, a.contorno.rgb),
+               (u"bmp", (31, 120, 180), u"solid", (31, 120, 180)),
+               u"dense5 con su borde")
+        pix = _pixeles_bmp_1bit(a.imagen_bytes)
+        _igual(fallos, (len(pix), len(pix[0])), (32, 32), u"tesela 32x32")
+        _cerca(fallos, sum(map(sum, pix)) / 1024.0, 0.375, u"cobertura dense5")
+    b = por_valor[u"B"]
+    _igual(fallos, [type(c).__name__ for c in getattr(b, "capas", [])],
+           [u"SimboloImagen", u"SimboloRelleno"], u"dense1 bajo un borde")
+    # Cobertura de Qt para cada nivel (medida en QGIS a 96 y 300 dpi).
+    for n, cob in ((1, 0.9375), (2, 0.875), (3, 0.625), (4, 0.5), (5, 0.375),
+                   (6, 0.125), (7, 0.0625)):
+        pix = _pixeles_bmp_1bit(parser_qgis._bmp_trama_densa("dense%d" % n))
+        _cerca(fallos, sum(map(sum, pix)) / 1024.0, cob,
+               u"cobertura de dense%d" % n)
+    if not any(u"misma cobertura" in a for a in capa.avisos):
+        fallos.append(u"falta el aviso de la trama: %r" % capa.avisos)
 
 
 def test_angulo_escalas(fallos):

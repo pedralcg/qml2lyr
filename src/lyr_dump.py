@@ -91,6 +91,13 @@ def _dump_simbolo(sym):
         d = {"tipo": "PictureFill",
              "angulo": round(pf.Angle, 3),
              "contorno": _dump_linea(_qi(pf, D.IFillSymbol).Outline)}
+        # Fondo nulo = trama de 1 bit con el color del relleno. Solo entonces
+        # se vuelcan color y fondo: asi los volcados de RasterFill no cambian.
+        fondo = _qi(pf.BackgroundColor, D.IColor) if pf.BackgroundColor \
+            else None
+        if fondo is not None and fondo.NullColor:
+            d["color"] = _dump_color(_qi(pf, D.IFillSymbol).Color)
+            d["fondo"] = "transparente"
         pic = pf.Picture
         d["tiene_imagen"] = pic is not None
         if pic is not None:

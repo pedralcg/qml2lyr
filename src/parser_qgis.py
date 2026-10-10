@@ -19,6 +19,7 @@ Nota de nombre: NO llamarlo parser.py — colisiona con el modulo stdlib
 import base64
 import os
 import re
+import struct
 import zipfile
 import xml.etree.ElementTree as ET
 
@@ -82,6 +83,54 @@ _ANCHO_PT_TRAZO_CONTINUO = 2.0
 # esriSimpleFillStyle. El emisor los traduce al enum concreto.
 _TRAMAS_RELLENO = ("horizontal", "vertical", "cross", "b_diagonal",
                    "f_diagonal", "diagonal_x")
+
+# Tramas `denseN` de QGIS: son los pinceles Qt::DenseNPattern, un mapa de bits
+# de 8x8 en PIXELES DE DISPOSITIVO (medido el 2026-10-10: a 96 y a 300 dpi el
+# patron en pixeles es el mismo, asi que en papel QGIS lo afina). Leidos de
+# Qt directamente y comparados con el render de QGIS 3.44.12: iguales salvo
+# fase. Cobertura: 93,75 / 87,5 / 62,5 / 50 / 37,5 / 12,5 / 6,25 %.
+_TRAMAS_DENSAS = {
+    "dense1": ("11111111", "11011101", "11111111", "11111111",
+               "11111111", "11011101", "11111111", "11111111"),
+    "dense2": ("11101110", "11111111", "10111011", "11111111",
+               "11101110", "11111111", "10111011", "11111111"),
+    "dense3": ("10101010", "11011101", "10101010", "01110111",
+               "10101010", "11011101", "10101010", "01110111"),
+    "dense4": ("01010101", "10101010", "01010101", "10101010",
+               "01010101", "10101010", "01010101", "10101010"),
+    "dense5": ("01010101", "00100010", "01010101", "10001000",
+               "01010101", "00100010", "01010101", "10001000"),
+    "dense6": ("00010001", "00000000", "01000100", "00000000",
+               "00010001", "00000000", "01000100", "00000000"),
+    "dense7": ("00000000", "00100010", "00000000", "00000000",
+               "00000000", "00100010", "00000000", "00000000"),
+}
+
+
+def _bmp_1bit(filas):
+    """Filas de '0'/'1' -> bytes de un BMP de 1 bit (paleta 0 blanco, 1
+    negro). El emisor pinta el 1 con el color del relleno y deja el 0
+    transparente. Escrito a mano: el Python de ArcGIS no trae PIL."""
+    ancho, alto = len(filas[0]), len(filas)
+    por_fila = ((ancho + 31) // 32) * 4
+    datos = b""
+    for fila in reversed(filas):  # un BMP va de abajo arriba
+        valor = int(fila, 2) << (por_fila * 8 - ancho)
+        datos += b"".join(struct.pack(">B", (valor >> (8 * k)) & 0xFF)
+                          for k in reversed(range(por_fila)))
+    paleta = struct.pack("<8B", 255, 255, 255, 0, 0, 0, 0, 0)
+    inicio = 14 + 40 + len(paleta)
+    return (struct.pack("<2sIHHI", b"BM", inicio + len(datos), 0, 0, inicio)
+            + struct.pack("<IiiHHIIiiII", 40, ancho, alto, 1, 1, 0,
+                          len(datos), 3780, 3780, 2, 2)
+            + paleta + datos)
+
+
+def _bmp_trama_densa(estilo):
+    """Tesela de 32x32 (el patron de 8x8 cuatro veces por lado): con 8x8 no
+    se probo y 32x32 se midio por render."""
+    return _bmp_1bit([f * 4 for f in _TRAMAS_DENSAS[estilo]] * 4)
+
 
 # Como nombra IUniqueValueRenderer un NULL real al componer el valor.
 # Verificado por render (2026-09-20) y con SymbolByFeature (2026-09-25): con
@@ -334,6 +383,8 @@ def _relleno_simple(opts, avisos):
     parser solo valida y deja el nombre de estilo de QGIS en el modelo.
     """
     estilo = opts.get("style", "solid")
+    if estilo in _TRAMAS_DENSAS:
+        return _relleno_denso(estilo, opts, avisos)
     if estilo not in ("solid", "no") and estilo not in _TRAMAS_RELLENO:
         raise SimbologiaNoSoportada(u"fill style='%s'" % estilo)
     rgb = None
@@ -350,6 +401,37 @@ def _relleno_simple(opts, avisos):
         rgb = _rgb_avisando(opts["color"], u"relleno tramado", avisos)
     return SimboloRelleno(rgb=rgb, style=estilo,
                           contorno=_contorno_desde_opts(opts, avisos))
+
+
+def _relleno_denso(estilo, opts, avisos):
+    """SimpleFill con trama `denseN` -> relleno de imagen con el MISMO mapa de
+    bits de Qt, pintado del color del relleno y con el fondo transparente.
+
+    Medido el 2026-10-10 contra QGIS 3.44.12: la cobertura coincide a 96 dpi
+    (93,9 / 62,5 / 37,5 / 6,1 %) y a 300 dpi (94,3 / 62,7 / 37,3 / 5,6 %); a
+    96 dpi el dibujo es el mismo pixel a pixel, y el fondo deja ver la capa de
+    debajo. Se descarto la rejilla de marcadores que proponia el plan:
+    ArcMap dibuja los cuadrados pequenyos con un numero impar de pixeles y la
+    cobertura en pantalla va a saltos (14 / 39 / 76 / 100 %).
+
+    Lo que no es igual, y se avisa: al exportar a mas resolucion QGIS afina el
+    patron (es de pixeles de dispositivo) y ArcMap conserva el grano de
+    pantalla. La cobertura, la misma.
+    """
+    contorno = _contorno_desde_opts(opts, avisos)
+    rgb, alpha = _rgb(opts["color"], u"relleno de trama")
+    if alpha == 0:
+        # Trama de color invisible: en QGIS solo se ve el borde.
+        return SimboloRelleno(rgb=None, style="no", contorno=contorno)
+    if alpha != 255:
+        avisos.append(_aviso_alfa_opaco(u"relleno de trama", alpha))
+    avisos.append(
+        u"trama '%s' de QGIS emitida como relleno de imagen con el mismo "
+        u"patron de pixeles y el fondo transparente: misma cobertura y, en "
+        u"pantalla, el mismo dibujo. Al exportar a mas resolucion QGIS afina "
+        u"la trama y ArcMap conserva el grano de pantalla" % estilo)
+    return SimboloImagen(imagen_bytes=_bmp_trama_densa(estilo), formato="bmp",
+                         contorno=contorno, color=rgb)
 
 
 def _tramado(layer_elem, avisos):

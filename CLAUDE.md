@@ -138,7 +138,8 @@ contaminan). Tres modos:
 la del `.qgz` — las dos por `parser_qgis.combinar_defquery`, que tolera que
 cualquiera de las dos falte.
 
-Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / multicapa / relleno
+Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / tramas `dense1-7`
+(relleno de imagen de 1 bit) / multicapa / relleno
 de puntos (`PointPatternFill`) / línea
 (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) / marcador (5 formas simples
 + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por escala.
@@ -258,6 +259,14 @@ Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr`
   `IColor.RGB` (BGR empaquetado): el QI a `IRgbColor` aquí es poco fiable.
 - **Estirado, rango**: usa el min/max del DATASET, no el de la clasificación QGIS.
   `emitir()` compara ambos y AVISA si difieren.
+- **Tramas `denseN`** (medido 2026-10-10): son `Qt::DenseNPattern`, 8×8 en
+  **píxeles de dispositivo** (a 300 dpi QGIS pinta el mismo patrón en píxeles,
+  más fino en papel). Van a un `PictureFillSymbol` con un **BMP de 1 bit**
+  (`parser_qgis._bmp_1bit`, escrito con `struct`: el Python de ArcGIS no trae
+  PIL): `IFillSymbol.Color` pinta los 1 y un `BackgroundColor` **nulo** deja
+  los 0 transparentes. Cobertura igual a Qt a 96 y 300 dpi. **No usar una
+  rejilla de marcadores**: ArcMap dibuja un cuadrado pequeño con un número
+  impar de píxeles y unos 2 de más, y la cobertura en pantalla va a saltos.
 - **RasterFill**: ArcObjects 10.5 SÍ soporta `esriIPicturePNG` en
   `CreateFillSymbolFromFile`. El tamaño exacto del mosaico y la transparencia alfa
   quedan para QA visual.
