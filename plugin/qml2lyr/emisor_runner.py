@@ -91,14 +91,17 @@ def ejecutar_qml(python27, emisor_py, qml, ruta_dato, salida_lyr, nombre=None,
 
 
 def ejecutar_mxd(python27, emisor_py, qgz, salida_mxd, plantilla=None,
-                 remap=None):
+                 remap=None, agrupar_wms=None):
     """El proyecto guardado en `qgz` -> un .mxd (modo --mxd del motor).
-    `remap`: lista de reglas "ORIGEN=DESTINO"."""
+    `remap`: lista de reglas "ORIGEN=DESTINO"; `agrupar_wms`: "grupo",
+    "proyecto" o None (ver `emisor.emitir_mxd`)."""
     args = {"modo": "mxd", "qgz": qgz, "salida": salida_mxd}
     if plantilla:
         args["plantilla"] = plantilla
     if remap:
         args["remap"] = list(remap)
+    if agrupar_wms:
+        args["agrupar_wms"] = agrupar_wms
     return ejecutar(python27, emisor_py, args, TIMEOUT_MXD_S)
 
 

@@ -740,6 +740,71 @@ def qgz_proyecto_mxd():
     print("escrito", salida)
 
 
+def qgz_mxd_wms():
+    """Proyecto para --mxd con --agrupar-wms, contra el WMS local:
+
+        x Ortofotos
+            x Parcelas          [parcelas]
+            - Textos            [textos]
+            x Zonas             <- vectorial en medio
+            - Masas             [masas]
+        x Base
+            x Parcelas al 50    [parcelas], opacidad 0,5: no se junta
+            - Masas base        [masas]
+            - Textos base       [textos]   <- con Masas base: todas apagadas
+        - Historico
+            x Textos hist       [textos]   <- grupo apagado
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    from qgis.core import QgsCoordinateReferenceSystem
+    servidor = wms_local.arrancar()
+    try:
+        proyecto = QgsProject.instance()
+        proyecto.clear()
+        proyecto.setCrs(QgsCoordinateReferenceSystem("EPSG:25830"))
+
+        def wms(nombre, capa_wms, opacidad=1.0):
+            capa = QgsRasterLayer(
+                "crs=EPSG:25830&format=image/png&layers=%s&styles&url=%s"
+                % (capa_wms, wms_local.URL), nombre, "wms")
+            if not capa.isValid():
+                sys.exit("capa WMS no valida: %s" % capa.error().summary())
+            capa.renderer().setOpacity(opacidad)
+            proyecto.addMapLayer(capa, False)
+            return capa
+
+        zonas = _vectorial("poligonos.shp", "Zonas")
+        zonas.renderer().setSymbol(_relleno("#e41a1c", 0.26))
+        proyecto.addMapLayer(zonas, False)
+        raiz = proyecto.layerTreeRoot()
+        orto = raiz.addGroup("Ortofotos")
+        orto.addLayer(wms("Parcelas", "parcelas"))
+        orto.addLayer(wms("Textos", "textos")).setItemVisibilityChecked(False)
+        orto.addLayer(zonas)
+        orto.addLayer(wms("Masas", "masas")).setItemVisibilityChecked(False)
+        base = raiz.addGroup("Base")
+        base.addLayer(wms("Parcelas al 50", "parcelas", 0.5))
+        base.addLayer(wms("Masas base", "masas")).setItemVisibilityChecked(False)
+        base.addLayer(wms("Textos base", "textos")).setItemVisibilityChecked(
+            False)
+        hist = raiz.addGroup("Historico")
+        hist.setItemVisibilityChecked(False)
+        hist.addLayer(wms("Textos hist", "textos"))
+
+        proyecto.writeEntryBool("Paths", "/Absolute", False)
+        metadatos = proyecto.metadata()
+        metadatos.setAuthor("qml2lyr tests")
+        proyecto.setMetadata(metadatos)
+        salida = os.path.join(DIR_FIX, "mxd_wms.qgz")
+        if not proyecto.write(salida):
+            sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+        proyecto.clear()
+        print("escrito", salida)
+    finally:
+        servidor.shutdown()
+
+
 def qml_wms_capa_viva():
     """Capa WMS viva, como la ve el plugin: su .qml (`saveNamedStyle`, que no
     lleva el origen) y su `layer.source()`, que el plugin pasa aparte."""
@@ -790,6 +855,7 @@ GENERADORES = {
     "batch_remap": qgz_batch_remap,
     "batch_wms": qgz_batch_wms,
     "proyecto_mxd": qgz_proyecto_mxd,
+    "mxd_wms": qgz_mxd_wms,
     "wms_capa_viva": qml_wms_capa_viva,
 }
 

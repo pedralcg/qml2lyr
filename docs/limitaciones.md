@@ -99,6 +99,24 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   dibujado propio** (se dibuja en el orden del árbol, y se avisa), los temas de
   mapa, los marcadores ni las composiciones.
 - Si la plantilla ya trae capas, se conservan debajo (y se avisa).
+- **Agrupar las capas WMS del mismo servicio** (opción `--agrupar-wms`, desde
+  el 2026-10-10; por defecto no se agrupa). Un `WMSMapLayer` de ArcMap arrastra
+  el **catálogo entero** del servicio y al abrir el `.mxd` cada capa WMS pide su
+  `GetCapabilities`. Con la opción, las capas que piden la misma `url=` con la
+  misma opacidad y las mismas escalas van en **una** capa de ArcMap, con
+  encendidas las subcapas de las que eran visibles (si no lo era ninguna, se
+  encienden las de todas y la capa queda apagada). Dos alcances, a elegir:
+  - `grupo`: solo hermanas de un mismo grupo de QGIS. El árbol no cambia; la
+    capa agrupada ocupa el sitio de la primera.
+  - `proyecto`: todas, en el sitio de la primera, así que **salen de sus
+    grupos**. Un grupo que se queda vacío por eso se lista con ese motivo. La
+    visibilidad que cuenta es la efectiva (la capa y sus grupos).
+
+  Lo que se pierde, y se avisa: el **nombre** de QGIS de cada capa (la subcapa
+  lleva el del servicio; la capa agrupada se llama como la primera, «(+N del
+  mismo WMS)») y, con varias encendidas, el **orden** (el servicio dibuja sus
+  subcapas en su orden). Las de opacidad o escalas distintas no se juntan. Los
+  WMTS no se agrupan: un `WMTSLayer` es una capa, no un catálogo.
 
 ## 3. Degradaciones que ArcMap 10.5 no puede representar (se avisan)
 

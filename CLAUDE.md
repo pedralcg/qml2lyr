@@ -90,7 +90,8 @@ contaminan). Tres modos:
   <args.json>` — fichero **UTF-8**. Clave `modo`: `"qml"` (por defecto: `qml`,
   `salida` y `dato` **o** `servicio` —el `source()` de una capa WMS/WMTS viva—,
   más `nombre`, `defquery`, `dir_tmp`) o `"mxd"` (`qgz`, `salida`, más
-  `plantilla`, `remap` como lista de `"ORIGEN=DESTINO"`, `dir_tmp`). Las claves se
+  `plantilla`, `remap` como lista de `"ORIGEN=DESTINO"`, `dir_tmp`, `agrupar_wms`
+  `"grupo"`/`"proyecto"`). Las claves se
   validan por modo: una desconocida o de otro modo se **rechaza** (una errata
   tipo `def_query` perdería la def-query en silencio), y `dato` + `servicio` a la
   vez también. Existe por el gotcha de `sys.argv` en cp1252 (ver abajo), y de
@@ -123,6 +124,9 @@ contaminan). Tres modos:
   `ok=False`, `tipo_error: VerificacionFallida`, exit 2. Si el `.mxd` existe:
   `SalidaExiste`. **`mxd.title` de arcpy no se guarda** (ni con `saveACopy` ni
   con `save`): el título del proyecto no se traslada.
+  `--agrupar-wms grupo|proyecto` (`_plan_agrupar_wms`): las WMS con la misma
+  `url=`, opacidad y escalas van en UNA capa de ArcMap (hermanas de un grupo, o
+  todo el proyecto en el sitio de la primera). Sin la opción, el MXD de siempre.
 - JSON por capa: `ok`/`nombre`/`salida`/`avisos` o `error`/`tipo_error`, más una
   lista `avisos` de nivel superior para lo que no es de ninguna capa (p.ej. un
   temporal que no se pudo borrar). Una capa que falla se reporta `ok=False` y NO

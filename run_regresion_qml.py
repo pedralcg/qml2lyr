@@ -1333,6 +1333,85 @@ def caso_modo_mxd(fallos):
            u"no sobrescribe un .mxd existente")
 
 
+QGZ_MXD_WMS = os.path.join(RAIZ, "tests", "fixtures", "mxd_wms.qgz")
+
+#: Arbol del MXD reabierto para cada valor de --agrupar-wms (ver el
+#: generador `qgz_mxd_wms`). Sin la opcion, el de siempre: una capa por capa.
+ARBOL_MXD_WMS = {
+    None: [u"x Ortofotos", u"x Ortofotos\\Parcelas", u"- Ortofotos\\Textos",
+           u"x Ortofotos\\Zonas", u"- Ortofotos\\Masas", u"x Base",
+           u"x Base\\Parcelas al 50", u"- Base\\Masas base",
+           u"- Base\\Textos base", u"- Historico", u"x Historico\\Textos hist"],
+    u"grupo": [u"x Ortofotos", u"x Ortofotos\\Parcelas (+2 del mismo WMS)",
+               u"x Ortofotos\\Zonas", u"x Base", u"x Base\\Parcelas al 50",
+               u"- Base\\Masas base (+1 del mismo WMS)", u"- Historico",
+               u"x Historico\\Textos hist"],
+    u"proyecto": [u"x Ortofotos", u"x Ortofotos\\Parcelas (+5 del mismo WMS)",
+                  u"x Ortofotos\\Zonas", u"x Base", u"x Base\\Parcelas al 50"],
+}
+
+
+def caso_mxd_agrupar_wms(fallos):
+    """(18bis) --agrupar-wms: las capas WMS del mismo servicio, misma opacidad
+    y mismas escalas van en UNA capa de ArcMap (cada WMS arrastra el catalogo
+    entero y pide su GetCapabilities al abrir el MXD). "grupo" junta solo
+    hermanas y el arbol no cambia; "proyecto" las junta todas donde estaba la
+    primera. Encendidas: las subcapas de las capas visibles; si no habia
+    ninguna, todas y la capa apagada. Sin la opcion, el MXD de siempre."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    carpeta = os.path.join(DIR_OUT, u"mxd_wms")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    servidor = wms_local.arrancar()
+    try:
+        for modo in (None, u"grupo", u"proyecto"):
+            mxd = os.path.join(carpeta, u"%s.mxd" % (modo or u"sin"))
+            argv = [u"--mxd", QGZ_MXD_WMS, mxd]
+            if modo:
+                argv += [u"--agrupar-wms", modo]
+            rc, out, err = _lanzar(argv)
+            datos = _json_estricto(out, fallos) or {}
+            if not datos.get("ok"):
+                fallos.append(u"%s: el MXD fallo: %r / %s" % (
+                    modo, datos.get("error"), err.decode("utf-8", "replace")[:300]))
+                continue
+            _igual(fallos, datos["verificacion"]["arbol"], ARBOL_MXD_WMS[modo],
+                   u"arbol con agrupar_wms=%s" % modo)
+            if modo is None:
+                _igual(fallos, "agrupadas" in datos, False,
+                       u"sin la opcion no se agrupa nada")
+                continue
+            agrupadas = dict((a["nombre"], a) for a in datos["agrupadas"])
+            encendidas = dict(
+                (n, (lyr_dump.dump_lyr(a["salida"]).get("wms") or {})
+                 .get("encendidas")) for n, a in agrupadas.items())
+            if modo == u"grupo":
+                _igual(fallos, encendidas, {
+                    u"Parcelas (+2 del mismo WMS)": [u"parcelas"],
+                    # Ninguna estaba encendida: todas, y la capa apagada.
+                    u"Masas base (+1 del mismo WMS)": [u"textos", u"masas"]},
+                    u"subcapas encendidas (grupo)")
+            else:
+                _igual(fallos, encendidas, {
+                    u"Parcelas (+5 del mismo WMS)": [u"parcelas"]},
+                    u"subcapas encendidas (proyecto)")
+                _igual(fallos, [o["motivo"] for o in datos["omitidas"]],
+                       [u"sus capas WMS van en una capa agrupada de otro "
+                        u"grupo"], u"el grupo que se vacia")
+            if not any(u"juntas en una" in a for a in datos["avisos"]):
+                fallos.append(u"%s: sin el aviso de la agrupacion: %r"
+                              % (modo, datos["avisos"]))
+        rc, out, err = _lanzar([u"--batch", QGZ_MXD_WMS,
+                                os.path.join(carpeta, u"lote"),
+                                u"--agrupar-wms", u"grupo"])
+        if rc == 0:
+            fallos.append(u"--agrupar-wms fuera de --mxd deberia rechazarse")
+    finally:
+        servidor.shutdown()
+
+
 def caso_args_json_plugin(fallos):
     """(20) Las dos vias nuevas del plugin por --args-json: una capa WMS viva
     (`servicio` = su `source()`, sin `dato`) y el proyecto entero a .mxd
@@ -1386,7 +1465,10 @@ def caso_args_json_plugin(fallos):
              u"qgz"),
             (u"clave de otro modo", {u"modo": u"mxd", u"qgz": u"x.qgz",
                                      u"salida": u"x.mxd", u"dato": u"a"},
-             u"dato")):
+             u"dato"),
+            (u"agrupar raro", {u"modo": u"mxd", u"qgz": u"x.qgz",
+                               u"salida": u"x.mxd", u"agrupar_wms": u"todo"},
+             u"agrupar_wms")):
         rc, out, err = _lanzar([u"--args-json",
                                 _escribir_args(u"args_malo.json", args)])
         error = ((_json_estricto(out, fallos) or {}).get("error") or u"")
@@ -1487,6 +1569,7 @@ CASOS = [
     ("batch_remap", caso_batch_remap),
     ("batch_wms", caso_batch_wms),
     ("modo_mxd", caso_modo_mxd),
+    ("mxd_agrupar_wms", caso_mxd_agrupar_wms),
     ("args_json_plugin", caso_args_json_plugin),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
