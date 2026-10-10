@@ -5,7 +5,7 @@
 > tiempo real como `aviso` en el JSON del emisor y el plugin lo muestra en la UI.
 > Este documento consolida esos avisos.
 >
-> Última revisión: 2026-09-24 · Referencia técnica: `CLAUDE.md` del repo.
+> Última revisión: 2026-10-10 · Referencia técnica: `CLAUDE.md` del repo.
 
 ## 1. Fuera del alcance del MVP (no-gos, por diseño)
 
@@ -274,7 +274,7 @@ símbolo más fiel posible y **avisa** de la pérdida:
 
 Para no leer esta lista como "no hace casi nada": el motor cubre el 80% real de
 los mapas temáticos forestales — fill sólido/hueco/tramado (6 patrones Qt) /
-multicapa / línea (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) /
+tramas `dense1-7` / relleno de puntos / multicapa / línea (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) /
 marcador (5 formas + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por
 escala; ráster paletted, pseudocolor DISCRETE e INTERPOLATED, y RasterFill; los
 4 renderers vectoriales (single, categorized, graduated, rule-based); shapefile,
