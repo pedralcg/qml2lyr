@@ -81,6 +81,94 @@ def qml_poligono_opacidad_50():
     _guardar_qml(capa, "poligono_opacidad_50.qml")
 
 
+def _con_opacidad(simbolo, opacidad):
+    simbolo.setOpacity(opacidad)
+    return simbolo
+
+
+def qml_opacidad_simbolo():
+    """Opacidad de SIMBOLO (`alpha` del <symbol>), no de capa. Si es la misma
+    en todas las clases se emite como transparencia de capa (multiplicada por
+    la de capa que ya hubiera); si difiere, se avisa. Tres casos:
+
+    - simbolo unico a 0,4 con la capa a 0,5 -> transparencia 1 - 0,2 = 80 %
+    - categorias A y B las dos a 0,5          -> transparencia 50 %
+    - categorias A a 0,4 y B opaca            -> sin transparencia, aviso
+    """
+    capa = _vectorial("poligonos.shp", "Opacidad de simbolo")
+    capa.renderer().setSymbol(_con_opacidad(_relleno("#1e78c8", 0.26), 0.4))
+    capa.setOpacity(0.5)
+    _guardar_qml(capa, "opacidad_simbolo_unico.qml")
+
+    capa = _vectorial("poligonos.shp", "Opacidad igual")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _con_opacidad(_relleno("#e41a1c", 0.26), 0.5),
+                            "Tipo A"),
+        QgsRendererCategory("B", _con_opacidad(_relleno("#377eb8", 0.26), 0.5),
+                            "Tipo B")]))
+    _guardar_qml(capa, "opacidad_categorias_igual.qml")
+
+    capa = _vectorial("poligonos.shp", "Opacidad mixta")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _con_opacidad(_relleno("#e41a1c", 0.26), 0.4),
+                            "Tipo A"),
+        QgsRendererCategory("B", _relleno("#377eb8", 0.26), "Tipo B")]))
+    _guardar_qml(capa, "opacidad_categorias_mixta.qml")
+
+
+def _relleno_puntos(color, tam, dx, dy, disp_x=0.0, disp_y=0.0, off_x=0.0,
+                    con_borde=True):
+    from qgis.core import QgsPointPatternFillSymbolLayer
+    marcador = QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": color, "size": str(tam),
+         "outline_color": "#000000", "outline_width": "0.2"})
+    ppf = QgsPointPatternFillSymbolLayer()
+    ppf.setSubSymbol(marcador)
+    ppf.setDistanceX(dx)
+    ppf.setDistanceY(dy)
+    ppf.setDisplacementX(disp_x)
+    ppf.setDisplacementY(disp_y)
+    ppf.setOffsetX(off_x)
+    capas = [ppf]
+    if con_borde:
+        capas.append(QgsSimpleLineSymbolLayer(QColor("#33a02c"), 0.26))
+    return QgsFillSymbol(capas)
+
+
+def qml_relleno_puntos():
+    """PointPatternFill, imitando los dos casos reales que se perdian:
+    A con las filas alternas desplazadas media separacion y borde (un
+    SimpleLine detras, como 'Montes'), B con filas Y columnas desplazadas y
+    un offset del patron (como 'Red de Corredores')."""
+    capa = _vectorial("poligonos.shp", "Relleno de puntos")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", _relleno_puntos(
+            "#33a02c", 1.2, 2.4, 2.4, disp_x=1.2), "Filas desplazadas"),
+        QgsRendererCategory("B", _relleno_puntos(
+            "#1f78b4", 0.6, 2.4, 2.4, disp_x=3, disp_y=1.2, off_x=5.4,
+            con_borde=False), "Filas y columnas")]))
+    _guardar_qml(capa, "relleno_puntos.qml")
+
+
+def qml_tramas_densas():
+    """Tramas `denseN`, como los casos reales que se perdian: A `dense5` con
+    borde del mismo color (Humedales), B `dense1` debajo de un relleno
+    transparente con borde (el simbolo de dos capas del DPMT)."""
+    from qgis.core import QgsSimpleFillSymbolLayer
+    denso5 = QgsFillSymbol.createSimple(
+        {"style": "dense5", "color": "#1f78b4", "outline_color": "#1f78b4",
+         "outline_width": "0.86"})
+    denso1 = QgsSimpleFillSymbolLayer(QColor("#2ca05f"), Qt.Dense1Pattern,
+                                      QColor("#1f78b4"), Qt.SolidLine, 0.86)
+    borde = QgsSimpleFillSymbolLayer(QColor(31, 120, 180, 0), Qt.SolidPattern,
+                                     QColor("#1f78b4"), Qt.SolidLine, 0.66)
+    capa = _vectorial("poligonos.shp", "Tramas densas")
+    capa.setRenderer(QgsCategorizedSymbolRenderer("TIPO", [
+        QgsRendererCategory("A", denso5, "Humedal"),
+        QgsRendererCategory("B", QgsFillSymbol([denso1, borde]), "DPMT")]))
+    _guardar_qml(capa, "tramas_densas.qml")
+
+
 def qml_linea_dash_dot():
     """Trazo `dash dot`: QGIS escribe el estilo con ESPACIOS. Ancho 0,4 mm
     (1,13 pt), por debajo del umbral en el que ArcMap dibuja el patron
@@ -652,6 +740,106 @@ def qgz_proyecto_mxd():
     print("escrito", salida)
 
 
+def qgz_mxd_wms():
+    """Proyecto para --mxd con --agrupar-wms, contra el WMS local:
+
+        x Ortofotos
+            x Parcelas          [parcelas]
+            - Textos            [textos]
+            x Zonas             <- vectorial en medio
+            - Masas             [masas]
+        x Base
+            x Parcelas al 50    [parcelas], opacidad 0,5: no se junta
+            - Masas base        [masas]
+            - Textos base       [textos]   <- con Masas base: todas apagadas
+        - Historico
+            x Textos hist       [textos]   <- grupo apagado
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    from qgis.core import QgsCoordinateReferenceSystem
+    servidor = wms_local.arrancar()
+    try:
+        proyecto = QgsProject.instance()
+        proyecto.clear()
+        proyecto.setCrs(QgsCoordinateReferenceSystem("EPSG:25830"))
+
+        def wms(nombre, capa_wms, opacidad=1.0):
+            capa = QgsRasterLayer(
+                "crs=EPSG:25830&format=image/png&layers=%s&styles&url=%s"
+                % (capa_wms, wms_local.URL), nombre, "wms")
+            if not capa.isValid():
+                sys.exit("capa WMS no valida: %s" % capa.error().summary())
+            capa.renderer().setOpacity(opacidad)
+            proyecto.addMapLayer(capa, False)
+            return capa
+
+        zonas = _vectorial("poligonos.shp", "Zonas")
+        zonas.renderer().setSymbol(_relleno("#e41a1c", 0.26))
+        proyecto.addMapLayer(zonas, False)
+        raiz = proyecto.layerTreeRoot()
+        orto = raiz.addGroup("Ortofotos")
+        orto.addLayer(wms("Parcelas", "parcelas"))
+        orto.addLayer(wms("Textos", "textos")).setItemVisibilityChecked(False)
+        orto.addLayer(zonas)
+        orto.addLayer(wms("Masas", "masas")).setItemVisibilityChecked(False)
+        base = raiz.addGroup("Base")
+        base.addLayer(wms("Parcelas al 50", "parcelas", 0.5))
+        base.addLayer(wms("Masas base", "masas")).setItemVisibilityChecked(False)
+        base.addLayer(wms("Textos base", "textos")).setItemVisibilityChecked(
+            False)
+        hist = raiz.addGroup("Historico")
+        hist.setItemVisibilityChecked(False)
+        hist.addLayer(wms("Textos hist", "textos"))
+
+        proyecto.writeEntryBool("Paths", "/Absolute", False)
+        metadatos = proyecto.metadata()
+        metadatos.setAuthor("qml2lyr tests")
+        proyecto.setMetadata(metadatos)
+        salida = os.path.join(DIR_FIX, "mxd_wms.qgz")
+        if not proyecto.write(salida):
+            sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+        proyecto.clear()
+        print("escrito", salida)
+    finally:
+        servidor.shutdown()
+
+
+def qgz_xyz_wmts():
+    """Capas XYZ, escritas por QGIS sin conectarse (XYZ no lee nada al crear
+    la capa): un GetTile KVP contra el WMTS local, un WMTS en forma REST (la
+    de EOX) y un XYZ puro (OSM). Solo servicios locales o que no se llegan a
+    pedir: la regresion no depende de la red. El PNOA del IGN cargado como
+    XYZ esta en `tests/test_parser.py`, con el origen tal como lo escribio
+    QGIS 3.44.12."""
+    from urllib.parse import quote
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    proyecto = QgsProject.instance()
+    proyecto.clear()
+    casos = (
+        ("XYZ que es WMTS", wms_local.URL_WMTS + "?SERVICE=WMTS&REQUEST="
+         "GetTile&VERSION=1.0.0&LAYER=mapa&STYLE=default&FORMAT=image/png&"
+         "TILEMATRIXSET=EPSG:25830&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"),
+        ("WMTS REST como XYZ", "http://a.tiles.maps.eox.at/wmts/1.0.0/"
+         "s2cloudless_3857/default/GoogleMapsCompatible/{z}/{y}/{x}.jpg"),
+        ("OSM", "https://tile.openstreetmap.org/{z}/{x}/{y}.png"))
+    for nombre, url in casos:
+        capa = QgsRasterLayer("type=xyz&url=%s&zmax=19&zmin=0"
+                              % quote(url, safe=":/"), nombre, "wms")
+        if not capa.isValid():
+            sys.exit("capa XYZ no valida: %s" % nombre)
+        proyecto.addMapLayer(capa)
+    metadatos = proyecto.metadata()
+    metadatos.setAuthor("qml2lyr tests")
+    proyecto.setMetadata(metadatos)
+    salida = os.path.join(DIR_FIX, "xyz_wmts.qgz")
+    if not proyecto.write(salida):
+        sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+    proyecto.clear()
+    print("escrito", salida)
+
+
 def qml_wms_capa_viva():
     """Capa WMS viva, como la ve el plugin: su .qml (`saveNamedStyle`, que no
     lleva el origen) y su `layer.source()`, que el plugin pasa aparte."""
@@ -678,6 +866,9 @@ def qml_wms_capa_viva():
 GENERADORES = {
     "poligono_simple": qml_poligono_simple,
     "poligono_opacidad_50": qml_poligono_opacidad_50,
+    "opacidad_simbolo": qml_opacidad_simbolo,
+    "relleno_puntos": qml_relleno_puntos,
+    "tramas_densas": qml_tramas_densas,
     "linea_dash_dot": qml_linea_dash_dot,
     "raster_paleta_alfa0": qml_raster_paleta_alfa0,
     "punto_angulo_escalas": qml_punto_angulo_escalas,
@@ -699,6 +890,8 @@ GENERADORES = {
     "batch_remap": qgz_batch_remap,
     "batch_wms": qgz_batch_wms,
     "proyecto_mxd": qgz_proyecto_mxd,
+    "mxd_wms": qgz_mxd_wms,
+    "xyz_wmts": qgz_xyz_wmts,
     "wms_capa_viva": qml_wms_capa_viva,
 }
 

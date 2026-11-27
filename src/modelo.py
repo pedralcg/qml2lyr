@@ -11,6 +11,18 @@ El emisor recibe puntos y no convierte nada.
 """
 
 
+class _Simbolo(object):
+    """Base de los simbolos del modelo.
+
+    `opacidad` es el `alpha` del <symbol> de QGIS (0-1), que pinta el simbolo
+    entero semitransparente. ArcMap no tiene opacidad por simbolo: el parser
+    la pasa a la transparencia de CAPA cuando es la misma en todas las clases
+    visibles (`parser_qgis._opacidad_de_simbolos`) y avisa si no. El emisor
+    no la lee.
+    """
+    opacidad = 1.0
+
+
 class Contorno(object):
     """Contorno de un relleno o linea suelta."""
 
@@ -22,7 +34,7 @@ class Contorno(object):
         self.style = style
 
 
-class SimboloRelleno(object):
+class SimboloRelleno(_Simbolo):
     """SimpleFill de QGIS: relleno solido o hueco con contorno."""
 
     def __init__(self, rgb=None, style="solid", contorno=None):
@@ -33,7 +45,7 @@ class SimboloRelleno(object):
         self.contorno = contorno or Contorno()
 
 
-class SimboloLinea(object):
+class SimboloLinea(_Simbolo):
     """SimpleLine de QGIS -> SimpleLineSymbol de ArcMap."""
 
     def __init__(self, rgb=None, width_pt=0.0, style="solid"):
@@ -45,7 +57,7 @@ class SimboloLinea(object):
         self.style = style
 
 
-class SimboloMarcador(object):
+class SimboloMarcador(_Simbolo):
     """SimpleMarker de QGIS -> SimpleMarkerSymbol de ArcMap."""
 
     def __init__(self, rgb=None, size_pt=0.0, forma="circulo",
@@ -61,7 +73,7 @@ class SimboloMarcador(object):
         self.angulo = angulo
 
 
-class SimboloMarcadorCaracter(object):
+class SimboloMarcadorCaracter(_Simbolo):
     """SimpleMarker de QGIS con forma que ArcMap no tiene como SimpleMarker
     (triangulo, estrella, pentagono...) -> CharacterMarkerSymbol con un glifo
     de la fuente ESRI Default Marker.
@@ -84,7 +96,7 @@ class SimboloMarcadorCaracter(object):
         self.fuente = fuente
 
 
-class SimboloTramado(object):
+class SimboloTramado(_Simbolo):
     """LinePatternFill de QGIS -> LineFillSymbol de ArcMap.
 
     `linea` es el SimboloLinea con el que se dibuja cada raya del tramado;
@@ -99,7 +111,7 @@ class SimboloTramado(object):
         self.contorno = contorno or Contorno(style="no")
 
 
-class SimboloImagen(object):
+class SimboloImagen(_Simbolo):
     """RasterFill de QGIS -> PictureFillSymbol de ArcMap.
 
     Rellena el poligono repitiendo una imagen en mosaico. `imagen_bytes` son los
@@ -110,15 +122,39 @@ class SimboloImagen(object):
     """
 
     def __init__(self, imagen_bytes, formato="png", ancho_pt=0.0, angulo=0.0,
-                 contorno=None):
+                 contorno=None, color=None):
         self.imagen_bytes = imagen_bytes
         self.formato = formato
         self.ancho_pt = ancho_pt
         self.angulo = angulo
         self.contorno = contorno or Contorno(style="no")
+        # Solo para un BMP de 1 bit (las tramas `dense` de QGIS): (r, g, b) de
+        # los pixeles a 1; los pixeles a 0 (el fondo) salen TRANSPARENTES.
+        # None = la imagen con sus propios colores (RasterFill).
+        self.color = color
 
 
-class SimboloMultiCapa(object):
+class SimboloRellenoMarcadores(_Simbolo):
+    """Una rejilla de marcadores -> MarkerFillSymbol de ArcMap (esriMFSGrid).
+
+    Un PointPatternFill de QGIS con filas o columnas desplazadas no cabe en
+    una sola rejilla: el parser lo emite como un SimboloMultiCapa de 2 o 4 de
+    estas, cada una con su separacion y su desfase (`desfase_*_pt`, el
+    XOffset/YOffset de IFillProperties). `marcador` es un SimboloMarcador o
+    SimboloMarcadorCaracter.
+    """
+
+    def __init__(self, marcador, sep_x_pt, sep_y_pt, desfase_x_pt=0.0,
+                 desfase_y_pt=0.0, contorno=None):
+        self.marcador = marcador
+        self.sep_x_pt = sep_x_pt
+        self.sep_y_pt = sep_y_pt
+        self.desfase_x_pt = desfase_x_pt
+        self.desfase_y_pt = desfase_y_pt
+        self.contorno = contorno or Contorno(style="no")
+
+
+class SimboloMultiCapa(_Simbolo):
     """Varias symbol-layers superpuestas -> MultiLayerFillSymbol de ArcMap.
 
     Es como QGIS dibuja Red Natura y los espacios protegidos: relleno hueco con

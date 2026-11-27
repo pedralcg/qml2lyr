@@ -282,8 +282,10 @@ class Qml2LyrPlugin(object):
             return
 
         remap = rutas.reglas_remap()
+        agrupar = rutas.agrupar_wms()
         plantilla = rutas.plantilla_mxd()
         self._tarea = TareaMxd(py27, emisor, qgz, salida, plantilla, remap,
+                               agrupar,
                                self._fin_mxd)
         QgsApplication.taskManager().addTask(self._tarea)
         self.iface.messageBar().pushMessage(
@@ -382,19 +384,20 @@ class TareaMxd(QgsTask):
     Cancelar no corta el subproceso (ArcObjects no tiene por donde): la tarea
     no se ofrece como cancelable."""
 
-    def __init__(self, py27, emisor, qgz, salida, plantilla, remap,
+    def __init__(self, py27, emisor, qgz, salida, plantilla, remap, agrupar,
                  al_terminar):
         QgsTask.__init__(self, u"qml2lyr: exportar a .mxd", tarea_sin_flags())
-        self._args = (py27, emisor, qgz, salida, plantilla, remap)
+        self._args = (py27, emisor, qgz, salida, plantilla, remap, agrupar)
         self._al_terminar = al_terminar
         self._data = None
         self._error = None
 
     def run(self):
-        py27, emisor, qgz, salida, plantilla, remap = self._args
+        py27, emisor, qgz, salida, plantilla, remap, agrupar = self._args
         try:
             self._data = ejecutar_mxd(py27, emisor, qgz, salida,
-                                      plantilla=plantilla, remap=remap)
+                                      plantilla=plantilla, remap=remap,
+                                      agrupar_wms=agrupar)
         except EmisorError as e:
             self._error = str(e)
         except Exception as e:  # nunca callar: se muestra al terminar

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Dialogo de ajustes: rutas al Python 2.7 de ArcGIS y a emisor.py, y las
-opciones del modo «Exportar proyecto a .mxd» (plantilla y reglas de remap).
+opciones del modo «Exportar proyecto a .mxd» (plantilla, reglas de remap y si
+se juntan las capas WMS del mismo servicio).
 
 Las dos son OPCIONALES: vacias, el plugin detecta el Python de ArcGIS 10.5 por
 el registro y usa el motor que lleva dentro (ver `rutas.py`). Rellenarlas sirve
@@ -12,6 +13,7 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog, QDialogButtonBox, QPlainTextEdit, QMessageBox,
+    QComboBox,
 )
 
 from . import rutas
@@ -66,6 +68,23 @@ class SettingsDialog(QDialog):
         self.ed_remap.setFixedHeight(70)
         lay.addWidget(self.ed_remap)
 
+        agrupar = QLabel(u"Exportar proyecto a .mxd — capas WMS del mismo "
+                         u"servicio (cada una arrastra el catálogo entero y "
+                         u"pide su GetCapabilities al abrir el MXD):")
+        agrupar.setWordWrap(True)
+        lay.addWidget(agrupar)
+        self.cb_agrupar = QComboBox()
+        for texto, valor in ((u"No agrupar: una capa de ArcMap por cada una "
+                              u"de QGIS", u""),
+                             (u"Juntarlas dentro de cada grupo (el árbol no "
+                              u"cambia)", u"grupo"),
+                             (u"Juntarlas en todo el proyecto (salen de sus "
+                              u"grupos)", u"proyecto")):
+            self.cb_agrupar.addItem(texto, valor)
+        actual = s.value("qml2lyr/agrupar_wms", "") or ""
+        self.cb_agrupar.setCurrentIndex(max(0, self.cb_agrupar.findData(actual)))
+        lay.addWidget(self.cb_agrupar)
+
         bb = QDialogButtonBox(botones_ok_cancel())
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -103,4 +122,5 @@ class SettingsDialog(QDialog):
         s.setValue("qml2lyr/emisor", self.ed_emisor.text().strip())
         s.setValue("qml2lyr/plantilla", self.ed_plantilla.text().strip())
         s.setValue("qml2lyr/remap", self.ed_remap.toPlainText().strip())
+        s.setValue("qml2lyr/agrupar_wms", self.cb_agrupar.currentData() or "")
         QDialog.accept(self)

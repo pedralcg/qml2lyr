@@ -5,7 +5,7 @@
 > tiempo real como `aviso` en el JSON del emisor y el plugin lo muestra en la UI.
 > Este documento consolida esos avisos.
 >
-> Última revisión: 2026-09-24 · Referencia técnica: `CLAUDE.md` del repo.
+> Última revisión: 2026-10-10 · Referencia técnica: `CLAUDE.md` del repo.
 
 ## 1. Fuera del alcance del MVP (no-gos, por diseño)
 
@@ -65,7 +65,19 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   `WMTSLayer` con la capa, la **matriz de teselas**, el estilo y el formato que
   pide QGIS. Necesita red, como el WMS. Probado con el `mapa-raster` del IGN.
 - **Teselas XYZ**: se rechazan diciendo qué son (ArcMap 10.5 no tiene ese tipo
-  de capa).
+  de capa). **Excepción (2026-10-10)**: un XYZ cuya URL es un `GetTile` de
+  **WMTS en forma KVP** (`…?SERVICE=WMTS&REQUEST=GetTile&LAYER=…&TILEMATRIXSET=…`,
+  como se suele cargar el PNOA del IGN) se emite como **capa WMTS** contra la
+  URL base, con la capa, la matriz, el estilo y el formato de la URL, y se avisa.
+  Con el PNOA del IGN, el WMTS **conecta** en ArcMap 10.5; que se vea la imagen
+  falta comprobarlo a mano (un export standalone de arcpy no dibuja ningún
+  WMTS, tampoco el de la v0.2.0). La forma **REST**
+  (`…/wmts/1.0.0/capa/estilo/matriz/{z}/{y}/{x}.jpg`) no dice dónde está el
+  `GetCapabilities`: se rechaza con la pista de cargarla en QGIS como WMTS.
+  Caso que lo motivó y que **no** se arregla así: las dos capas de Sentinel-2
+  cloudless de **EOX**. La KVP (`s2maps-tiles.eu`) solo responde con una
+  cabecera `Referer`; sin ella da 403, también a ArcMap, que no puede conectar
+  (medido el 2026-10-10). La REST (`tiles.maps.eox.at`) no responde.
 - **GeoPackage**: **sí se convierte** desde 2026-09-20. arcpy 10.5 abre la capa
   como `ruta.gpkg\main.<layername>` (verificado con `MakeFeatureLayer` y con una
   emisión completa a `.lyr`). Requisito: que el origen de la capa en QGIS diga
@@ -99,6 +111,24 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   dibujado propio** (se dibuja en el orden del árbol, y se avisa), los temas de
   mapa, los marcadores ni las composiciones.
 - Si la plantilla ya trae capas, se conservan debajo (y se avisa).
+- **Agrupar las capas WMS del mismo servicio** (opción `--agrupar-wms`, desde
+  el 2026-10-10; por defecto no se agrupa). Un `WMSMapLayer` de ArcMap arrastra
+  el **catálogo entero** del servicio y al abrir el `.mxd` cada capa WMS pide su
+  `GetCapabilities`. Con la opción, las capas que piden la misma `url=` con la
+  misma opacidad y las mismas escalas van en **una** capa de ArcMap, con
+  encendidas las subcapas de las que eran visibles (si no lo era ninguna, se
+  encienden las de todas y la capa queda apagada). Dos alcances, a elegir:
+  - `grupo`: solo hermanas de un mismo grupo de QGIS. El árbol no cambia; la
+    capa agrupada ocupa el sitio de la primera.
+  - `proyecto`: todas, en el sitio de la primera, así que **salen de sus
+    grupos**. Un grupo que se queda vacío por eso se lista con ese motivo. La
+    visibilidad que cuenta es la efectiva (la capa y sus grupos).
+
+  Lo que se pierde, y se avisa: el **nombre** de QGIS de cada capa (la subcapa
+  lleva el del servicio; la capa agrupada se llama como la primera, «(+N del
+  mismo WMS)») y, con varias encendidas, el **orden** (el servicio dibuja sus
+  subcapas en su orden). Las de opacidad o escalas distintas no se juntan. Los
+  WMTS no se agrupan: un `WMTSLayer` es una capa, no un catálogo.
 
 ## 3. Degradaciones que ArcMap 10.5 no puede representar (se avisan)
 
@@ -115,6 +145,40 @@ símbolo más fiel posible y **avisa** de la pérdida:
   distintas**. Lo que se pierde no es "algo de transparencia", es la
   **diferencia entre clases**: dos clases con alfa 90/255 y 50/255 acaban
   igual de opacas bajo la misma transparencia de capa.
+- **Opacidad de SÍMBOLO** (el control de opacidad del símbolo en QGIS, `alpha`
+  del `<symbol>`): desde el 2026-10-10, si **todos** los símbolos que se dibujan
+  tienen la misma (siempre en símbolo único y en cada `.lyr` de regla; en
+  categorizado y graduado si coinciden), **se emite como transparencia de
+  capa**, multiplicada por la de capa que ya hubiera: transparencia =
+  1 − opacidad_capa × opacidad_símbolo. Medido por render: un relleno al 50 %
+  sale del mismo color en los dos programas (±1 nivel). La única diferencia,
+  que se avisa, es donde se **solapan entidades** de la capa: QGIS acumula el
+  color y ArcMap no. Si la opacidad **difiere entre clases**, no hay
+  transparencia de capa que lo reproduzca: las clases salen opacas y se avisa
+  nombrando la de cada una. La opacidad de un **sub-símbolo** (la raya de un
+  tramado, el marcador de un relleno de puntos) tampoco viaja y se avisa.
+- **Relleno de puntos** (`PointPatternFill`, desde el 2026-10-10) → rejilla de
+  `MarkerFillSymbol`. Viajan el marcador, la separación y el desplazamiento de
+  filas y columnas alternas (`displacement_x/y`). Como una rejilla de ArcMap
+  solo es una red rectangular, con desplazamiento se emiten **2 rejillas**
+  superpuestas (filas o columnas) o **4** (las dos), y se avisa. La red de
+  puntos se midió por render contra QGIS 3.44 en cinco configuraciones (centros
+  de cada marcador, vectores a los vecinos): **idéntica** en separación,
+  escalonado y tamaño de marcador. Lo que **no** viaja: el **origen** del
+  patrón (QGIS lo ancla a cada entidad y ArcMap al mapa, así que los puntos
+  pueden salir corridos; el dibujo es el mismo) y por tanto tampoco el
+  `offset`; la **desviación aleatoria**, el **giro** del patrón y los modos de
+  **recorte** distintos del de por defecto. Todos se avisan.
+- **Tramas `dense1`–`dense7`** (desde el 2026-10-10): son pinceles de Qt, un
+  mapa de bits de 8×8 en **píxeles de dispositivo**. Se emiten como relleno de
+  imagen con **el mismo mapa de bits**, pintado del color del relleno y con el
+  **fondo transparente** (deja ver lo de debajo). Medido por render contra QGIS
+  3.44: la cobertura coincide a 96 y a 300 dpi (`dense5`: 37,5 % en los dos) y a
+  96 dpi el dibujo es el mismo píxel a píxel. La diferencia, que se avisa: al
+  exportar a más resolución QGIS **afina** la trama (sigue siendo de 1 píxel de
+  dispositivo) y ArcMap conserva el **grano de pantalla**; la cobertura es la
+  misma. (La rejilla de puntos que se probó antes da en pantalla saltos de
+  14 / 39 / 76 / 100 % de cobertura y se descartó.)
 - **Offset del tramado** (`LinePatternFill` con `offset` ≠ 0): `ILineFillSymbol`
   no desplaza el patrón; se dibuja sin ese desplazamiento. Se avisa desde el
   2026-09-21 (antes se perdía mudo; hay casos reales con `offset=1.5`).
@@ -210,7 +274,7 @@ símbolo más fiel posible y **avisa** de la pérdida:
 
 Para no leer esta lista como "no hace casi nada": el motor cubre el 80% real de
 los mapas temáticos forestales — fill sólido/hueco/tramado (6 patrones Qt) /
-multicapa / línea (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) /
+tramas `dense1-7` / relleno de puntos / multicapa / línea (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) /
 marcador (5 formas + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por
 escala; ráster paletted, pseudocolor DISCRETE e INTERPOLATED, y RasterFill; los
 4 renderers vectoriales (single, categorized, graduated, rule-based); shapefile,

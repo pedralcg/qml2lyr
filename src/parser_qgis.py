@@ -19,11 +19,13 @@ Nota de nombre: NO llamarlo parser.py — colisiona con el modulo stdlib
 import base64
 import os
 import re
+import struct
 import zipfile
 import xml.etree.ElementTree as ET
 
 from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
+                    SimboloRellenoMarcadores,
                     RendererSimple,
                     ClaseValor, RendererValoresUnicos, ClaseRango,
                     RendererGraduado, RendererRasterValoresUnicos,
@@ -81,6 +83,54 @@ _ANCHO_PT_TRAZO_CONTINUO = 2.0
 # esriSimpleFillStyle. El emisor los traduce al enum concreto.
 _TRAMAS_RELLENO = ("horizontal", "vertical", "cross", "b_diagonal",
                    "f_diagonal", "diagonal_x")
+
+# Tramas `denseN` de QGIS: son los pinceles Qt::DenseNPattern, un mapa de bits
+# de 8x8 en PIXELES DE DISPOSITIVO (medido el 2026-10-10: a 96 y a 300 dpi el
+# patron en pixeles es el mismo, asi que en papel QGIS lo afina). Leidos de
+# Qt directamente y comparados con el render de QGIS 3.44.12: iguales salvo
+# fase. Cobertura: 93,75 / 87,5 / 62,5 / 50 / 37,5 / 12,5 / 6,25 %.
+_TRAMAS_DENSAS = {
+    "dense1": ("11111111", "11011101", "11111111", "11111111",
+               "11111111", "11011101", "11111111", "11111111"),
+    "dense2": ("11101110", "11111111", "10111011", "11111111",
+               "11101110", "11111111", "10111011", "11111111"),
+    "dense3": ("10101010", "11011101", "10101010", "01110111",
+               "10101010", "11011101", "10101010", "01110111"),
+    "dense4": ("01010101", "10101010", "01010101", "10101010",
+               "01010101", "10101010", "01010101", "10101010"),
+    "dense5": ("01010101", "00100010", "01010101", "10001000",
+               "01010101", "00100010", "01010101", "10001000"),
+    "dense6": ("00010001", "00000000", "01000100", "00000000",
+               "00010001", "00000000", "01000100", "00000000"),
+    "dense7": ("00000000", "00100010", "00000000", "00000000",
+               "00000000", "00100010", "00000000", "00000000"),
+}
+
+
+def _bmp_1bit(filas):
+    """Filas de '0'/'1' -> bytes de un BMP de 1 bit (paleta 0 blanco, 1
+    negro). El emisor pinta el 1 con el color del relleno y deja el 0
+    transparente. Escrito a mano: el Python de ArcGIS no trae PIL."""
+    ancho, alto = len(filas[0]), len(filas)
+    por_fila = ((ancho + 31) // 32) * 4
+    datos = b""
+    for fila in reversed(filas):  # un BMP va de abajo arriba
+        valor = int(fila, 2) << (por_fila * 8 - ancho)
+        datos += b"".join(struct.pack(">B", (valor >> (8 * k)) & 0xFF)
+                          for k in reversed(range(por_fila)))
+    paleta = struct.pack("<8B", 255, 255, 255, 0, 0, 0, 0, 0)
+    inicio = 14 + 40 + len(paleta)
+    return (struct.pack("<2sIHHI", b"BM", inicio + len(datos), 0, 0, inicio)
+            + struct.pack("<IiiHHIIiiII", 40, ancho, alto, 1, 1, 0,
+                          len(datos), 3780, 3780, 2, 2)
+            + paleta + datos)
+
+
+def _bmp_trama_densa(estilo):
+    """Tesela de 32x32 (el patron de 8x8 cuatro veces por lado): con 8x8 no
+    se probo y 32x32 se midio por render."""
+    return _bmp_1bit([f * 4 for f in _TRAMAS_DENSAS[estilo]] * 4)
+
 
 # Como nombra IUniqueValueRenderer un NULL real al componer el valor.
 # Verificado por render (2026-09-20) y con SymbolByFeature (2026-09-25): con
@@ -333,6 +383,8 @@ def _relleno_simple(opts, avisos):
     parser solo valida y deja el nombre de estilo de QGIS en el modelo.
     """
     estilo = opts.get("style", "solid")
+    if estilo in _TRAMAS_DENSAS:
+        return _relleno_denso(estilo, opts, avisos)
     if estilo not in ("solid", "no") and estilo not in _TRAMAS_RELLENO:
         raise SimbologiaNoSoportada(u"fill style='%s'" % estilo)
     rgb = None
@@ -351,6 +403,37 @@ def _relleno_simple(opts, avisos):
                           contorno=_contorno_desde_opts(opts, avisos))
 
 
+def _relleno_denso(estilo, opts, avisos):
+    """SimpleFill con trama `denseN` -> relleno de imagen con el MISMO mapa de
+    bits de Qt, pintado del color del relleno y con el fondo transparente.
+
+    Medido el 2026-10-10 contra QGIS 3.44.12: la cobertura coincide a 96 dpi
+    (93,9 / 62,5 / 37,5 / 6,1 %) y a 300 dpi (94,3 / 62,7 / 37,3 / 5,6 %); a
+    96 dpi el dibujo es el mismo pixel a pixel, y el fondo deja ver la capa de
+    debajo. Se descarto la rejilla de marcadores que proponia el plan:
+    ArcMap dibuja los cuadrados pequenyos con un numero impar de pixeles y la
+    cobertura en pantalla va a saltos (14 / 39 / 76 / 100 %).
+
+    Lo que no es igual, y se avisa: al exportar a mas resolucion QGIS afina el
+    patron (es de pixeles de dispositivo) y ArcMap conserva el grano de
+    pantalla. La cobertura, la misma.
+    """
+    contorno = _contorno_desde_opts(opts, avisos)
+    rgb, alpha = _rgb(opts["color"], u"relleno de trama")
+    if alpha == 0:
+        # Trama de color invisible: en QGIS solo se ve el borde.
+        return SimboloRelleno(rgb=None, style="no", contorno=contorno)
+    if alpha != 255:
+        avisos.append(_aviso_alfa_opaco(u"relleno de trama", alpha))
+    avisos.append(
+        u"trama '%s' de QGIS emitida como relleno de imagen con el mismo "
+        u"patron de pixeles y el fondo transparente: misma cobertura y, en "
+        u"pantalla, el mismo dibujo. Al exportar a mas resolucion QGIS afina "
+        u"la trama y ArcMap conserva el grano de pantalla" % estilo)
+    return SimboloImagen(imagen_bytes=_bmp_trama_densa(estilo), formato="bmp",
+                         contorno=contorno, color=rgb)
+
+
 def _tramado(layer_elem, avisos):
     """symbol-layer LinePatternFill -> SimboloTramado (LineFillSymbol).
 
@@ -363,7 +446,7 @@ def _tramado(layer_elem, avisos):
     sub = layer_elem.find("symbol")
     if sub is None:
         raise SimbologiaNoSoportada(u"LinePatternFill sin sub-simbolo de linea")
-    linea = _simbolo_desde_symbol(sub, avisos)
+    linea = _simbolo_desde_symbol(sub, avisos, anidado=True)
     if not isinstance(linea, SimboloLinea):
         raise SimbologiaNoSoportada(
             u"LinePatternFill con sub-simbolo %s" % type(linea).__name__)
@@ -432,6 +515,90 @@ def _relleno_imagen(layer_elem, avisos):
                          contorno=Contorno(style="no"))
 
 
+def _rejillas_de_puntos(dx, dy, disp_x, disp_y):
+    """Patron de QGIS -> rejillas (sep_x, sep_y, desfase_x, desfase_y) de
+    ArcMap cuya union es el mismo conjunto de puntos.
+
+    Medido en QGIS 3.44.12 (2026-10-10, centros de marcador sobre un render
+    a 96 dpi): el punto (i, j) cae en x = i*dx + disp_x*[j impar],
+    y = j*dy + disp_y*[i impar]. Una rejilla de ArcMap solo es una red
+    rectangular, asi que con desplazamiento se parte por paridad de fila
+    y/o columna: 2 rejillas con un desplazamiento, 4 con los dos.
+
+    El SIGNO de cada eje no importa: la red con +d y con -d es la misma
+    trasladada (cambiar j por j+1), y lo mismo al reflejarla. Por eso el
+    sentido de los ejes de ArcMap no puede estropear el patron, solo su fase.
+    """
+    hay_x, hay_y = abs(disp_x) > 1e-9, abs(disp_y) > 1e-9
+    if not hay_x and not hay_y:
+        return [(dx, dy, 0.0, 0.0)]
+    if not hay_y:
+        return [(dx, 2 * dy, 0.0, 0.0), (dx, 2 * dy, disp_x % dx, dy)]
+    if not hay_x:
+        return [(2 * dx, dy, 0.0, 0.0), (2 * dx, dy, dx, disp_y % dy)]
+    return [(2 * dx, 2 * dy, (a * dx + b * disp_x) % (2 * dx),
+             (b * dy + a * disp_y) % (2 * dy))
+            for a in (0, 1) for b in (0, 1)]
+
+
+def _relleno_puntos(layer_elem, avisos):
+    """symbol-layer PointPatternFill -> rejilla(s) de MarkerFillSymbol.
+
+    Viajan el marcador, la separacion y el desplazamiento de filas y
+    columnas (exacto, ver `_rejillas_de_puntos`). No viajan, y se avisa: el
+    desplazamiento aleatorio, el giro del patron y los modos de recorte que no
+    son el de por defecto. El ORIGEN del patron tampoco: QGIS lo ancla a cada
+    entidad y ArcMap al mapa, asi que los puntos pueden salir corridos (el
+    dibujo es el mismo).
+    """
+    opts = _opciones(layer_elem)
+    sub = layer_elem.find("symbol")
+    if sub is None:
+        raise SimbologiaNoSoportada(u"PointPatternFill sin sub-simbolo")
+    marcador = _simbolo_desde_symbol(sub, avisos, anidado=True)
+    if not isinstance(marcador, (SimboloMarcador, SimboloMarcadorCaracter)):
+        raise SimbologiaNoSoportada(
+            u"PointPatternFill con sub-simbolo %s" % type(marcador).__name__)
+
+    def medida(clave, defecto):
+        return _a_puntos(opts.get(clave) or defecto,
+                         opts.get(clave + "_unit") or "MM", clave)
+    dx, dy = medida("distance_x", "3"), medida("distance_y", "3")
+    if dx <= 0 or dy <= 0:
+        raise SimbologiaNoSoportada(
+            u"PointPatternFill con distancia no positiva (%g x %g pt)"
+            % (dx, dy))
+    rejillas = _rejillas_de_puntos(dx, dy, medida("displacement_x", "0"),
+                                   medida("displacement_y", "0"))
+
+    for clave in ("random_deviation_x", "random_deviation_y"):
+        if _es_offset_no_nulo(opts.get(clave)):
+            avisos.append(u"relleno de puntos con desviacion aleatoria (%s=%s): "
+                          u"ArcMap pone los puntos en rejilla exacta"
+                          % (clave, opts.get(clave)))
+    if _es_offset_no_nulo(opts.get("angle")):
+        avisos.append(u"relleno de puntos girado %s grados: el patron sale sin "
+                      u"girar" % opts.get("angle"))
+    if (opts.get("clip_mode") or u"shape") != u"shape":
+        avisos.append(u"relleno de puntos con recorte '%s': ArcMap recorta los "
+                      u"marcadores por el borde del poligono"
+                      % opts.get("clip_mode"))
+    if _es_offset_no_nulo(opts.get("offset_x")) or \
+            _es_offset_no_nulo(opts.get("offset_y")):
+        avisos.append(u"relleno de puntos con offset %s, %s: no se traslada "
+                      u"(ArcMap ancla el patron al mapa y QGIS a cada "
+                      u"entidad); el dibujo es el mismo, corrido"
+                      % (opts.get("offset_x"), opts.get("offset_y")))
+    if len(rejillas) > 1:
+        avisos.append(u"relleno de puntos con filas o columnas desplazadas: se "
+                      u"emite como %d rejillas superpuestas de ArcMap"
+                      % len(rejillas))
+
+    grids = [SimboloRellenoMarcadores(marcador, sx, sy, ox, oy)
+             for sx, sy, ox, oy in rejillas]
+    return grids[0] if len(grids) == 1 else SimboloMultiCapa(grids)
+
+
 def _capa_de_relleno(layer_elem, avisos):
     """UNA symbol-layer de un <symbol type="fill"> -> simbolo del modelo.
 
@@ -441,6 +608,7 @@ def _capa_de_relleno(layer_elem, avisos):
                             (asi dibuja QGIS un poligono "solo borde")
       - LinePatternFill  -> tramado
       - RasterFill       -> relleno con imagen en mosaico
+      - PointPatternFill -> rejilla(s) de marcadores
     """
     clase = layer_elem.get("class")
 
@@ -458,6 +626,9 @@ def _capa_de_relleno(layer_elem, avisos):
     if clase == "RasterFill":
         return _relleno_imagen(layer_elem, avisos)
 
+    if clase == "PointPatternFill":
+        return _relleno_puntos(layer_elem, avisos)
+
     raise SimbologiaNoSoportada(u"symbol-layer class='%s' en un fill" % clase)
 
 
@@ -467,22 +638,49 @@ def _simbolo_fill(layers, avisos):
     Varias symbol-layers superpuestas (relleno hueco + trama = Red Natura, ENP)
     se traducen a un simbolo multicapa; ArcMap lo representa con
     MultiLayerFillSymbol. Una sola capa se emite plana, sin envoltorio.
+
+    Una symbol-layer que ya sale multicapa (el relleno de puntos con filas
+    desplazadas son varias rejillas) se APLANA en el multicapa del simbolo:
+    sus capas van seguidas, en el sitio que ocupaba ella en el orden de QGIS.
     """
     if len(layers) == 1:
         return _capa_de_relleno(layers[0], avisos)
-    return SimboloMultiCapa([_capa_de_relleno(l, avisos) for l in layers])
+    capas = []
+    for l in layers:
+        simbolo = _capa_de_relleno(l, avisos)
+        if isinstance(simbolo, SimboloMultiCapa):
+            capas.extend(simbolo.capas)
+        else:
+            capas.append(simbolo)
+    return SimboloMultiCapa(capas)
 
 
-def _simbolo_desde_symbol(symbol_elem, avisos):
+def _simbolo_desde_symbol(symbol_elem, avisos, anidado=False):
+    """<symbol> -> simbolo del modelo, con su opacidad (`alpha`) en
+    `simbolo.opacidad`.
+
+    La opacidad de un simbolo de CLASE se resuelve despues, al ver todas las
+    clases de la capa (`_opacidad_de_simbolos`). La de un sub-simbolo
+    (`anidado`: la raya de un tramado, el marcador de un relleno de puntos)
+    no tiene adonde ir en ArcMap y se avisa aqui.
+    """
+    opacidad = float(symbol_elem.get("alpha") or 1.0)
+    if anidado and abs(opacidad - 1.0) > 1e-6:
+        avisos.append(
+            u"sub-simbolo %s con opacidad %g dentro de otro simbolo: ArcMap "
+            u"no tiene opacidad por simbolo y lo pinta OPACO"
+            % (symbol_elem.get("type"), opacidad))
+    simbolo = _simbolo_sin_opacidad(symbol_elem, avisos)
+    if not anidado:
+        simbolo.opacidad = opacidad
+    return simbolo
+
+
+def _simbolo_sin_opacidad(symbol_elem, avisos):
     tipo = symbol_elem.get("type")
     layers = symbol_elem.findall("layer")
     if not layers:
         raise SimbologiaNoSoportada(u"symbol type='%s' sin symbol-layers" % tipo)
-
-    alpha = symbol_elem.get("alpha")
-    if alpha is not None and abs(float(alpha) - 1.0) > 1e-6:
-        avisos.append(u"simbolo con opacidad %s en QGIS: ArcMap lo pinta opaco"
-                      % alpha)
 
     # QGIS no dibuja los symbol-layers desactivados; el .lyr tampoco debe.
     apagados = [l for l in layers if l.get("enabled") == "0"]
@@ -1663,10 +1861,61 @@ def _capas_desde_estilo(elem, nombre, avisos):
                        avisos=avisos)]
 
 
+def _simbolos_de_clase(renderer):
+    """Los simbolos que el renderer vectorial dibuja -> [(etiqueta, simbolo)].
+    Vacio en raster y servicios, que no tienen simbolos de QGIS."""
+    if isinstance(renderer, RendererSimple):
+        return [(renderer.label, renderer.simbolo)]
+    if isinstance(renderer, RendererValoresUnicos):
+        pares = [(c.label or c.valor, c.simbolo) for c in renderer.clases]
+        if renderer.default_simbolo is not None:
+            pares.append((renderer.default_label or u"resto",
+                          renderer.default_simbolo))
+        return pares
+    if isinstance(renderer, RendererGraduado):
+        return [(r.label, r.simbolo) for r in renderer.rangos]
+    return []
+
+
+def _opacidad_de_simbolos(capa):
+    """Opacidad de SIMBOLO (`alpha` del <symbol>) -> transparencia de CAPA.
+
+    ArcMap no tiene opacidad por simbolo, pero si TODOS los simbolos que se
+    dibujan llevan la misma `o`, pintar cada uno a `o` es lo mismo que pintar
+    la capa a `o` (salvo donde se solapan entidades: ahi QGIS acumula color y
+    ArcMap no). Se multiplica por la opacidad de capa que ya hubiera:
+    transparencia = 1 - opacidad_capa * o.
+
+    Si difieren entre clases no hay transparencia de capa que lo reproduzca:
+    los simbolos salen opacos y se avisa. Hasta 2026-10-10 se avisaba
+    siempre, con la redaccion "ArcMap lo pinta opaco", que se leia como falsa
+    al ver la capa translucida por su transparencia de capa.
+    """
+    pares = _simbolos_de_clase(capa.renderer)
+    opacidades = sorted(set(round(s.opacidad, 6) for _, s in pares))
+    if not opacidades or opacidades == [1.0]:
+        return
+    if len(opacidades) == 1:
+        capa.opacidad *= opacidades[0]
+        capa.avisos.append(
+            u"opacidad de simbolo %g, la misma en todas las clases: se emite "
+            u"como transparencia de CAPA (%d%%). Se ve igual salvo donde se "
+            u"solapan entidades: QGIS acumula el color y ArcMap no"
+            % (opacidades[0], int(round((1.0 - capa.opacidad) * 100))))
+        return
+    capa.avisos.append(
+        u"simbolos con opacidades distintas segun la clase (%s): ArcMap no "
+        u"tiene opacidad por simbolo, asi que todas las clases salen OPACAS. "
+        u"La transparencia de CAPA si viaja, pero es una sola para todas"
+        % u", ".join(u"'%s' %g" % (etiqueta or u"?", s.opacidad)
+                     for etiqueta, s in pares))
+
+
 def _aplicar_cabecera(capas, cabecera, datasource=None, defquery=None):
     """Pega los atributos de capa a cada CapaEstilo (tambien a las de reglas)."""
     for capa in capas:
         capa.opacidad = cabecera["opacidad"]
+        _opacidad_de_simbolos(capa)
         capa.escala_min = cabecera["escala_min"]
         capa.escala_max = cabecera["escala_max"]
         capa.etiquetado = cabecera.get("etiquetado")
@@ -1694,17 +1943,55 @@ def _servicio_wms(maplayer_elem, nombre, avisos):
                                      nombre, avisos)
 
 
+def _wmts_desde_gettile(url):
+    """URL de teselas XYZ que es en realidad un GetTile de WMTS en forma KVP
+    (`...?SERVICE=WMTS&REQUEST=GetTile&LAYER=...&TILEMATRIXSET=...&
+    TileMatrix={z}...`) -> ServicioWMTS contra la URL base; None si no lo es.
+
+    Es una forma habitual de cargar un WMTS en QGIS como XYZ (el PNOA del IGN
+    circula asi). Solo se reconoce la forma KVP: lleva servicio, capa y
+    matriz por su nombre. La REST (`.../wmts/1.0.0/capa/estilo/matriz/{z}/
+    {y}/{x}.jpg`) no dice donde esta el GetCapabilities y no se adivina."""
+    base, _, consulta = (url or u"").partition(u"?")
+    if not consulta:
+        return None
+    params = dict((k.lower(), v) for k, v in
+                  (trozo.partition(u"=")[::2] for trozo in consulta.split(u"&"))
+                  if k)
+    if params.get(u"service", u"").upper() != u"WMTS" or \
+            params.get(u"request", u"").lower() != u"gettile" or \
+            not params.get(u"layer") or not params.get(u"tilematrixset"):
+        return None
+    return ServicioWMTS(url=base, capa=params[u"layer"],
+                        matriz=params[u"tilematrixset"],
+                        estilo=params.get(u"style") or None,
+                        formato=params.get(u"format") or None)
+
+
 def servicio_desde_datasource(datasource, nombre, avisos):
     """Origen de datos del proveedor `wms` de QGIS (el `<datasource>` del
     .qgs o el `layer.source()` de la capa viva) -> ServicioWMS o ServicioWMTS
-    (el mismo proveedor sirve los dos); SimbologiaNoSoportada si es un XYZ."""
+    (el mismo proveedor sirve los dos); SimbologiaNoSoportada si es un XYZ
+    (salvo que su URL sea un GetTile de WMTS, ver `_wmts_desde_gettile`)."""
     pares = _parametros_uri(datasource)
     params = dict(pares)
     url = params.get(u"url")
     if params.get(u"type") == u"xyz":
+        wmts = _wmts_desde_gettile(url)
+        if wmts is not None:
+            avisos.append(
+                u"'%s' es una capa XYZ de QGIS, pero su URL es un GetTile de "
+                u"WMTS: se emite como capa WMTS (capa %s, matriz %s) contra "
+                u"el GetCapabilities de %s" % (nombre, wmts.capa, wmts.matriz,
+                                                wmts.url))
+            return wmts
+        pista = u""
+        if u"wmts" in (url or u"").lower():
+            pista = (u". Su URL parece un WMTS en forma REST, de la que no se "
+                     u"deduce el GetCapabilities: anadela en QGIS como WMTS")
         raise SimbologiaNoSoportada(
             u"'%s' es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
-            u"tipo de capa para ellas" % (nombre, url))
+            u"tipo de capa para ellas%s" % (nombre, url, pista))
     if not url:
         raise SimbologiaNoSoportada(u"capa WMS '%s' sin url= en el origen de "
                                     u"datos" % nombre)
