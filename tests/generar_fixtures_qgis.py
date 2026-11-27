@@ -698,6 +698,29 @@ def qml_raster_gris():
           "NoEnhancement")
 
 
+def qgz_xyz_pnoa_ign():
+    """El PNOA del IGN cargado como XYZ, como circula (GetTile KVP de
+    pnoa-ma): ArcMap 10.5 conecta el WMTS pero no lo dibuja (medido el
+    2026-11-27), y el conversor tiene que decirlo. XYZ no se conecta al
+    crearlo: no hace falta red."""
+    proyecto = QgsProject.instance()
+    proyecto.clear()
+    url = ("https://www.ign.es/wmts/pnoa-ma?request=GetTile%26service=WMTS"
+           "%26VERSION=1.0.0%26Layer=OI.OrthoimageCoverage%26Style=default"
+           "%26Format=image/jpeg%26TileMatrixSet=GoogleMapsCompatible"
+           "%26TileMatrix={z}%26TileRow={y}%26TileCol={x}")
+    capa = QgsRasterLayer("type=xyz&url=" + url + "&zmax=20&zmin=0",
+                          "PNOA IGN", "wms")
+    if not capa.isValid():
+        sys.exit("capa XYZ no valida")
+    proyecto.addMapLayer(capa)
+    salida = os.path.join(DIR_FIX, "xyz_pnoa_ign.qgz")
+    if not proyecto.write(salida):
+        sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+    proyecto.clear()
+    print("escrito", salida)
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -1155,6 +1178,7 @@ GENERADORES = {
     "multicapa_linea_marcador": qml_multicapa_linea_marcador,
     "relleno_puntos_marcador_offset": qml_relleno_puntos_marcador_offset,
     "raster_gris": qml_raster_gris,
+    "xyz_pnoa_ign": qgz_xyz_pnoa_ign,
 }
 
 
