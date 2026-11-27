@@ -5,7 +5,7 @@
 > tiempo real como `aviso` en el JSON del emisor y el plugin lo muestra en la UI.
 > Este documento consolida esos avisos.
 >
-> Última revisión: 2026-10-10 · Referencia técnica: `CLAUDE.md` del repo.
+> Última revisión: 2026-11-27 (v0.5.0) · Referencia técnica: `CLAUDE.md` del repo.
 
 ## 1. Fuera del alcance del MVP (no-gos, por diseño)
 
@@ -120,15 +120,26 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   encienden las de todas y la capa queda apagada). Dos alcances, a elegir:
   - `grupo`: solo hermanas de un mismo grupo de QGIS. El árbol no cambia; la
     capa agrupada ocupa el sitio de la primera.
-  - `proyecto`: todas, en el sitio de la primera, así que **salen de sus
-    grupos**. Un grupo que se queda vacío por eso se lista con ese motivo. La
-    visibilidad que cuenta es la efectiva (la capa y sus grupos).
+  - `proyecto`: todas, en el sitio de la **primera que se ve** (la capa y sus
+    grupos encendidos; si no se ve ninguna, la primera del árbol). Las demás
+    salen de sus grupos, y un grupo que se queda vacío por eso se lista con ese
+    motivo. Hasta la v0.5.0 la ponía siempre la primera del árbol, y si estaba
+    en un grupo **apagado** la capa agrupada no se veía en ArcMap.
+
+  Dos grupos hermanos con el **mismo nombre** son dos grupos (hasta la v0.5.0,
+  en `grupo`, se juntaban sus WMS como si fueran uno).
 
   Lo que se pierde, y se avisa: el **nombre** de QGIS de cada capa (la subcapa
   lleva el del servicio; la capa agrupada se llama como la primera, «(+N del
   mismo WMS)») y, con varias encendidas, el **orden** (el servicio dibuja sus
   subcapas en su orden). Las de opacidad o escalas distintas no se juntan. Los
   WMTS no se agrupan: un `WMTSLayer` es una capa, no un catálogo.
+- **Un `.lyr` por nodo de primer nivel** (desde la v0.5.0): además del `.mxd`,
+  en `<mxd>_lyr/` sale `NN_<nombre>.lyr` por cada grupo o capa suelta de primer
+  nivel, en el orden del árbol (clave `lyr_primer_nivel` del JSON). Es el camino
+  para llevar el proyecto a un **ArcMap ya abierto**: añadir el `.lyr` de un
+  grupo mete el grupo entero, con su árbol, simbología y visibilidades. Si no se
+  pueden escribir, el `.mxd` sale igual y se avisa.
 
 ## 3. Degradaciones que ArcMap 10.5 no puede representar (se avisan)
 
@@ -145,6 +156,11 @@ símbolo más fiel posible y **avisa** de la pérdida:
   distintas**. Lo que se pierde no es "algo de transparencia", es la
   **diferencia entre clases**: dos clases con alfa 90/255 y 50/255 acaban
   igual de opacas bajo la misma transparencia de capa.
+  **Alfa 0** (color invisible en QGIS) no es una transparencia parcial: desde la
+  v0.5.0 se reproduce. Contorno o línea → sin trazo; trama Qt → relleno hueco;
+  relleno de un marcador → color nulo (solo se ve el borde, y si el borde
+  también es invisible, nada); raya de un tramado → relleno hueco, avisando.
+  Hasta la v0.5.0 todos esos salían **opacos y sin aviso**.
 - **Opacidad de SÍMBOLO** (el control de opacidad del símbolo en QGIS, `alpha`
   del `<symbol>`): desde el 2026-10-10, si **todos** los símbolos que se dibujan
   tienen la misma (siempre en símbolo único y en cada `.lyr` de regla; en
@@ -169,6 +185,13 @@ símbolo más fiel posible y **avisa** de la pérdida:
   pueden salir corridos; el dibujo es el mismo) y por tanto tampoco el
   `offset`; la **desviación aleatoria**, el **giro** del patrón y los modos de
   **recorte** distintos del de por defecto. Todos se avisan.
+  **Marcador desplazado dentro del relleno** (`offset` del sub-símbolo): QGIS
+  dibuja el patrón como un mosaico y **recorta** en su borde el marcador
+  desplazado, así que salen trozos («rayitas») en vez de puntos. ArcMap dibuja
+  los puntos enteros y el dibujo **no se parece**: aviso específico desde la
+  v0.5.0 (medido por render en una capa real con el marcador a 7 mm). Un
+  desplazamiento de filas o columnas **mayor que la distancia** no es problema:
+  casa con ArcMap.
 - **Tramas `dense1`–`dense7`** (desde el 2026-10-10): son pinceles de Qt, un
   mapa de bits de 8×8 en **píxeles de dispositivo**. Se emiten como relleno de
   imagen con **el mismo mapa de bits**, pintado del color del relleno y con el
@@ -185,8 +208,16 @@ símbolo más fiel posible y **avisa** de la pérdida:
 - **RasterFill (relleno con imagen)**: se emite como `PictureFillSymbol`, pero el
   **tamaño exacto del mosaico** (no se fija XScale/YScale) y la **transparencia
   alfa** (ArcMap usa color-clave, no alfa) quedan para **QA visual**.
-- **Símbolos multicapa** (relleno hueco + trama = Red Natura / ENP): el orden de
-  índices está verificado, pero el **dibujado** queda pendiente de **QA visual**.
+- **Símbolos multicapa de relleno** (relleno hueco + trama = Red Natura / ENP):
+  orden y dibujado comprobados por render en capas reales (2026-11-27).
+- **Líneas y marcadores multicapa** (desde la v0.5.0): varias `SimpleLine`
+  superpuestas (el *casing* de carreteras y ríos) → `MultiLayerLineSymbol`;
+  varios `SimpleMarker` → `MultiLayerMarkerSymbol`, con la última capa de QGIS
+  encima (comprobado por render). Dentro de un marcador multicapa, el borde de
+  una forma dibujada por **glifo** (que en ArcMap es un halo) no se emite y se
+  avisa. **Siguen rechazadas**, con mensaje: `MarkerLine`, `HashLine`,
+  `ArrowLine` y cualquier otra symbol-layer de línea o marcador que no sea la
+  simple.
 - **symbol-layers desactivados** en QGIS: no se emiten (se avisa cuántos).
 - **Categorías / intervalos ocultos** en QGIS: no se emiten (se avisa por cada uno).
 - **Trazo discontinuo con ancho ≥ 2 pt**: ArcMap lo dibuja **continuo**. Medido
@@ -198,8 +229,15 @@ símbolo más fiel posible y **avisa** de la pérdida:
   dibuja el patrón de `customdash`. ArcMap no lo reproduce y la línea sale con
   el `line_style` (normalmente `solid`) → **aviso fuerte**, con el patrón que se
   pierde.
-- **`offset` de línea o de marcador**: ArcMap dibuja sobre el eje / centrado en
-  el punto (se avisa con el desplazamiento y su unidad).
+- **`offset` de línea, de marcador o de relleno**: ArcMap dibuja sobre el eje,
+  centrado en el punto o sin desplazar el polígono (se avisa con el
+  desplazamiento y su unidad; el del relleno, desde la v0.5.0).
+- **Unidades**: milímetros y puntos viajan tal cual. **Píxeles** (estilos
+  pensados para pantalla), desde la v0.5.0, a 96 dpi (1 px = 0,75 pt) y con
+  aviso: en QGIS ese tamaño depende del dispositivo (en papel a 300 dpi sale
+  menor) y en ArcMap es fijo. **Unidades de mapa** (`MapUnit`,
+  `RenderMetersInMapUnits`) y **pulgadas** se rechazan: un tamaño en unidades
+  de mapa no tiene equivalente en un símbolo de `.lyr`.
 - **Borde de marcador con ancho 0**: en QGIS es un *hairline* (1 px) y sí se ve.
   ArcMap no tiene hairline y un ancho mínimo inventado engordaría el símbolo a
   cualquier escala de impresión → el `.lyr` sale **sin borde** y se avisa
@@ -213,6 +251,12 @@ símbolo más fiel posible y **avisa** de la pérdida:
   `half_square`, `heart`…) se **rechaza** con mensaje explícito: no hay glifo
   verificado y no se inventa. **Sí** viaja la rotación (`angle`), con el
   sentido invertido (QGIS gira en horario y ArcMap en antihorario).
+- **Regla ELSE** de un rule-based: su def-query es «lo que no casa con
+  ninguna otra regla», una conjunción por regla con el `IS NULL` de **sus**
+  campos: `(NOT (f1) OR "A" IS NULL) AND (NOT (f2) OR "B" IS NULL)`. Medido
+  entidad a entidad contra QGIS sobre una geodatabase con nulos. Hasta la
+  v0.5.0, con reglas sobre campos distintos, una entidad con un campo nulo
+  podía caer en su regla **y** en el ELSE, y ArcMap la dibujaba dos veces.
 - **Visibilidad por escala de una REGLA** (`scalemindenom`/`scalemaxdenom` en un
   rule-based): se ignora y se avisa. ArcMap solo tiene escalas por capa, y la
   capa ya lleva las suyas (esas **sí** se trasladan).
@@ -222,7 +266,21 @@ símbolo más fiel posible y **avisa** de la pérdida:
   (medido en los dos programas el 2026-09-25). Hasta esa fecha se emitía como
   una clase `<Null>` y en ArcMap **no se dibujaban** los valores sin categoría.
 
+- **Etiquetas que ArcObjects no acepta**: desde la v0.5.0 la capa sale **sin
+  etiquetas** y con aviso, en vez de fallar entera.
+
 ### Ráster, específico
+
+- **Gris de banda única** (`singlebandgray`, el render por defecto de un MDT o
+  de una pendiente; desde la v0.5.0): estirado de negro a blanco (o de blanco a
+  negro) con el mínimo y el máximo del realce de QGIS; sin realce, 0-255. Como
+  todo estirado, ArcMap lo reparte sobre el mínimo y el máximo del **dataset**:
+  si QGIS usa el corte acumulado 2-98 % (su valor por defecto) los grises no
+  coinciden y se avisa. Con los realces que recortan, QGIS deja transparente lo
+  que cae fuera del rango y ArcMap lo pinta en negro o blanco: se avisa. Medido
+  por render, celda a celda contra QGIS: ±4 niveles.
+- **Sombreado** (`hillshade`): se rechaza. ArcMap 10.5 no tiene un render de
+  sombreado al vuelo; hay que generar el sombreado como ráster.
 
 - **RGB** (`multibandcolor`): viajan las bandas (también cambiadas, p. ej.
   falso color 4-3-2), la banda alfa, «sin realce» y el estirado entre mínimo y
@@ -251,6 +309,10 @@ símbolo más fiel posible y **avisa** de la pérdida:
 - **Estirado (INTERPOLATED)**: usa el min/max del **dataset**, no el rango de la
   clasificación QGIS. Si difieren, la leyenda cambiaría de reparto → se **avisa**
   para que el usuario lo sepa (no se falsea en silencio).
+  **Color entre paradas**: QGIS interpola en RGB y ArcObjects no tiene ese
+  algoritmo. Desde la v0.5.0 cada tramo se parte en 32 subtramos con los
+  extremos calculados en RGB. Hasta entonces se usaba en silencio el algoritmo
+  LabLCh, y un gris medio de QGIS (128) salía 99 en ArcMap.
 - **Ocultación por combinación RGB**: ArcMap no la soporta (se avisa).
 
 ## 4. Datos malformados (se saltan, no se inventan)
@@ -274,9 +336,10 @@ símbolo más fiel posible y **avisa** de la pérdida:
 
 Para no leer esta lista como "no hace casi nada": el motor cubre el 80% real de
 los mapas temáticos forestales — fill sólido/hueco/tramado (6 patrones Qt) /
-tramas `dense1-7` / relleno de puntos / multicapa / línea (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) /
-marcador (5 formas + 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por
-escala; ráster paletted, pseudocolor DISCRETE e INTERPOLATED, y RasterFill; los
+tramas `dense1-7` / relleno de puntos / multicapa / línea (`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`,
+también multicapa) / marcador (5 formas + 6 por glifo + rotación, también multicapa) / def-query /
+opacidad de capa / visibilidad por escala; ráster paletted, pseudocolor DISCRETE e INTERPOLATED, gris
+de banda única, RGB y RasterFill; los
 4 renderers vectoriales (single, categorized, graduated, rule-based); shapefile,
 ráster de fichero y GeoPackage. Validado contra `.lyr` entregados en proyectos
 reales, contra decenas de capas de proyectos QGIS de terceros y, en este repo,

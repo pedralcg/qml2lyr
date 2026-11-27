@@ -37,6 +37,12 @@ jobs:
         run: python -m compileall -q plugin/qml2lyr plugin/empaquetar.py tests/generar_fixtures_qgis.py tests/wms_local.py tests/test_plugin_informe.py
       - name: Tests del informe del plugin (sin QGIS)
         run: python tests/test_plugin_informe.py
+      # El parser es py2.7, pero tiene que importar tambien en py3 (sin `ur""`):
+      # asi el plugin y el generador de fixtures pueden validar un estilo sin
+      # lanzar ArcGIS. -W error: un escape invalido en una regex cuenta como fallo.
+      - name: El parser importa en Python 3
+        working-directory: src
+        run: python -W error -c "import parser_qgis"
       # El mismo zip que publicaria un release: si el empaquetado se rompe, se
       # sabe en el PR y no el dia del tag.
       - name: Empaquetar el plugin

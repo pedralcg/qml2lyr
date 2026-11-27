@@ -125,8 +125,12 @@ contaminan). Tres modos:
   `SalidaExiste`. **`mxd.title` de arcpy no se guarda** (ni con `saveACopy` ni
   con `save`): el título del proyecto no se traslada.
   `--agrupar-wms grupo|proyecto` (`_plan_agrupar_wms`): las WMS con la misma
-  `url=`, opacidad y escalas van en UNA capa de ArcMap (hermanas de un grupo, o
-  todo el proyecto en el sitio de la primera). Sin la opción, el MXD de siempre.
+  `url=`, opacidad y escalas van en UNA capa de ArcMap (hermanas de un grupo,
+  con el grupo identificado por NODO y no por nombre; o todo el proyecto en el
+  sitio de la primera que SE VE). Sin la opción, el MXD de siempre.
+  Tras verificar, `_lyr_primer_nivel` escribe `NN_<nombre>.lyr` por nodo de
+  primer nivel en `dir_lyr` (`lyr_primer_nivel` en el JSON): un grupo entero
+  para `add_layer` en un ArcMap abierto. Si falla, aviso; el `.mxd` vale.
 - JSON por capa: `ok`/`nombre`/`salida`/`avisos` o `error`/`tipo_error`, más una
   lista `avisos` de nivel superior para lo que no es de ninguna capa (p.ej. un
   temporal que no se pudo borrar). Una capa que falla se reporta `ok=False` y NO
@@ -145,14 +149,18 @@ cualquiera de las dos falte.
 Cobertura: fill sólido/hueco/tramado (los 6 patrones Qt) / tramas `dense1-7`
 (relleno de imagen de 1 bit) / multicapa / relleno
 de puntos (`PointPatternFill`) / línea
-(`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`) / marcador (5 formas simples
-+ 6 por glifo + rotación) / def-query / opacidad de capa / visibilidad por escala.
+(`solid`, `dash`, `dot`, `dash dot`, `dash dot dot`; varias `SimpleLine` →
+`MultiLayerLineSymbol`) / marcador (5 formas simples + 6 por glifo + rotación;
+varios `SimpleMarker` → `MultiLayerMarkerSymbol`) / def-query / opacidad de
+capa / visibilidad por escala. Unidades: mm, pt y px (a 96 dpi, con aviso).
 Categorizado por concatenación de 2-3 campos (`concat`/`||`, con o sin
 `coalesce(campo,'')`) → valores únicos multicampo con `FieldDelimiter`; los
 nulos que QGIS convierte en `''` se emiten además como `<Null>` y `' '`,
 agrupados con `AddReferenceValue` (`parser_qgis._expresion_multicampo`).
 Ráster: paletted, pseudocolor DISCRETE (clases) e INTERPOLATED (estirado),
+**gris** (`singlebandgray`: estirado de dos paradas negro↔blanco),
 **RGB** (`multibandcolor`: bandas, alfa, sin realce o estirado mín-máx por banda).
+`hillshade` se rechaza (ArcMap 10.5 no sombrea al vuelo).
 RasterFill (imagen). Datos: shapefile, ráster de fichero y **GeoPackage**.
 Servicios en `--batch` (`CapaEstilo.servicio`, sin renderer): **WMS** → `.lyr` con
 `WMSMapLayer`, **WMTS** → `.lyr` con `WMTSLayer`; XYZ se rechaza, salvo que su
@@ -265,6 +273,37 @@ es un WMTS contra la URL base.
   `IColor.RGB` (BGR empaquetado): el QI a `IRgbColor` aquí es poco fiable.
 - **Estirado, rango**: usa el min/max del DATASET, no el de la clasificación QGIS.
   `emitir()` compara ambos y AVISA si difieren.
+- **Estirado, color entre paradas** (medido por render, 2026-11-27): QGIS
+  interpola en RGB y ArcObjects NO tiene ese algoritmo (`esriColorRampAlgorithm`
+  = HSV 0, CIELab 1, LabLCh 2; **`esriLinearAlgorithm` no existe**). Hasta la
+  v0.5.0 un `getattr(D, "esriLinearAlgorithm", 2)` caía en silencio en LabLCh y
+  un gris 128 salía 99. `_rampa_multiparte` parte cada tramo en
+  `_SUBTRAMOS_RAMPA` (32) con los extremos en RGB y algoritmo HSV explícito.
+  Residuo: ±4 niveles, el muestreo de ArcMap (no baja con más subtramos, y con
+  128 el blanco puro sale 252).
+- **ELSE de un rule-based**: conjunción por regla, cada una con el `IS NULL` de
+  SUS campos: `(NOT ((f1)) OR "A" IS NULL) AND (NOT ((f2)) OR "B" IS NULL)`. La
+  forma `NOT (f1 OR f2) OR "A" IS NULL OR "B" IS NULL` (hasta la v0.5.0) metía
+  en el ELSE entidades que casaban con otra regla. Para saber qué regla da QGIS
+  a cada entidad, **`legendKeysForFeature`**: `symbolsForFeature` devuelve el
+  símbolo del ELSE en TODAS las entidades.
+- **Alfa 0 vectorial** = invisible, no "transparencia parcial": contorno/línea
+  → `style="no"`, trama Qt → hueco, relleno de marcador → `rgb=None` (el emisor
+  lo pinta `NullColor` con `_color_o_nulo`, solo en marcadores: en el resto un
+  `rgb=None` es un cableado roto y `_color` revienta).
+- **Marcador con `offset` dentro de un `PointPatternFill`**: QGIS pinta el
+  patrón como mosaico y RECORTA en su borde el marcador desplazado (trozos en
+  vez de puntos; medido por render, «Red de Corredores»). ArcMap no lo imita:
+  aviso específico. El desplazamiento de filas/columnas mayor que la distancia
+  NO es eso: casa con ArcMap.
+- **`lyr_dump`, líneas**: el multicapa (`IMultiLayerLineSymbol`) se prueba antes
+  que `ISimpleLineSymbol`, y su capa 0 es la de ARRIBA. `ILineProperties.Template`
+  nulo (línea cartográfica continua) **revienta** con «NULL COM pointer access»
+  en vez de devolver None. HashLine y MarkerLine solo se identifican, como
+  `no-soportado`; nunca el nombre del puntero (dos contornos distintos se
+  volcarían igual).
+- **Etiquetas**: un fallo de ArcObjects en `_etiquetar` deja la capa SIN
+  etiquetas y con aviso (limpia `AnnotationProperties`), no la tumba.
 - **Tramas `denseN`** (medido 2026-10-10): son `Qt::DenseNPattern`, 8×8 en
   **píxeles de dispositivo** (a 300 dpi QGIS pinta el mismo patrón en píxeles,
   más fino en papel). Van a un `PictureFillSymbol` con un **BMP de 1 bit**
@@ -370,7 +409,9 @@ es un WMTS contra la URL base.
 ## Tests
 
 - **`tests/test_parser.py`** — Python 2.7 puro, sin ArcGIS: el parser sobre los
-  fixtures. Es lo que corre el CI.
+  fixtures. Es lo que corre el CI. El CI comprueba además que `parser_qgis`
+  **importa en Python 3** (`python -W error`): nada de literales `ur""`, y las
+  barras de las regex escapadas (`u"\\s"`).
 - **`run_regresion_qml.py`** — la cadena entera con ArcGIS 10.5: lanza `emisor.py`
   como **subproceso de verdad** en sus modos (`--args-json`, posicional y
   `--batch`) y comprueba cada `.lyr` con `lyr_dump`. Datos sintéticos con arcpy

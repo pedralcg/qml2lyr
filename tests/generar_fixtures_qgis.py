@@ -512,6 +512,192 @@ def qml_raster_rgb():
          raster="rgb16.tif")
 
 
+def qml_reglas_else_dos_campos():
+    """Dos reglas sobre CAMPOS DISTINTOS y un ELSE, sobre la GDB con nulos.
+    Una entidad con G nulo que casa con la regla de R no puede caer tambien en
+    el ELSE (hasta la v0.4.0 ArcMap la dibujaba dos veces). Imprime la regla
+    que QGIS da a cada entidad: es la tabla esperada de la regresion."""
+    capa = QgsVectorLayer(os.path.join(DIR_DATOS, "nulos.gdb")
+                          + "|layername=cuadros", "Else dos campos", "ogr")
+    if not capa.isValid():
+        sys.exit("nulos.gdb no valida (corre antes run_regresion_qml.py)")
+    raiz = QgsRuleBasedRenderer.Rule(None)
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        _relleno("#e41a1c", 0.26), 0, 0, "\"G\" = '1'", "G uno"))
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        _relleno("#377eb8", 0.26), 0, 0, "\"R\" = 'Rural'", "Rural"))
+    raiz.appendChild(QgsRuleBasedRenderer.Rule(
+        _relleno("#999999", 0.26), 0, 0, "ELSE", "Resto"))
+    capa.setRenderer(QgsRuleBasedRenderer(raiz))
+    _guardar_qml(capa, "reglas_else_dos_campos.qml")
+    # OJO: symbolsForFeature NO aplica la logica del ELSE (lo devuelve en
+    # todas las entidades); legendKeysForFeature si, y coincide con el render.
+    from qgis.core import QgsRenderContext
+    ctx = QgsRenderContext()
+    rend = capa.renderer().clone()
+    rend.startRender(ctx, capa.fields())
+    etiquetas = {i.ruleKey(): i.label() for i in rend.legendSymbolItems()}
+    for f in capa.getFeatures():
+        print("   QGIS entidad", f.id(), sorted(
+            etiquetas[k] for k in rend.legendKeysForFeature(f, ctx)
+            if k in etiquetas))
+    rend.stopRender(ctx)
+
+
+def qml_unidad_pixel():
+    """Marcador con tamanyo y borde en PIXELES (estilos pensados para
+    pantalla). Hasta la v0.4.0 la capa entera fallaba por la unidad."""
+    capa = _vectorial("puntos.shp", "Pixel")
+    capa.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": "#0078c8", "size": "8", "size_unit": "Pixel",
+         "outline_color": "#000000", "outline_width": "1",
+         "outline_width_unit": "Pixel"}))
+    _guardar_qml(capa, "unidad_pixel.qml")
+
+
+def qml_relleno_offset():
+    """SimpleFill desplazado (efecto sombra): ArcMap lo dibuja centrado, y
+    hasta la v0.4.0 se perdia sin aviso."""
+    capa = _vectorial("poligonos.shp", "Relleno desplazado")
+    capa.renderer().setSymbol(QgsFillSymbol.createSimple(
+        {"color": "#c81e1e", "outline_color": "#000000", "outline_width": "0.26",
+         "style": "solid", "offset": "1,1", "offset_unit": "MM"}))
+    _guardar_qml(capa, "relleno_offset.qml")
+
+
+def qml_alfa_cero():
+    """Colores vectoriales con ALFA 0 (invisibles en QGIS) en cada sitio donde
+    hasta la v0.4.0 salian opacos y sin aviso: contorno de relleno, trama Qt,
+    linea, relleno de marcador, marcador entero y raya de un tramado."""
+    from qgis.core import QgsLinePatternFillSymbolLayer
+    capa = _vectorial("poligonos.shp", "Contorno invisible")
+    capa.renderer().setSymbol(QgsFillSymbol.createSimple(
+        {"color": "#c81e1e", "outline_color": "0,0,0,0", "outline_width": "0.5",
+         "style": "solid"}))
+    _guardar_qml(capa, "alfa0_contorno.qml")
+
+    capa = _vectorial("poligonos.shp", "Trama invisible")
+    capa.renderer().setSymbol(QgsFillSymbol.createSimple(
+        {"color": "200,30,30,0", "outline_color": "#000000",
+         "outline_width": "0.5", "style": "b_diagonal"}))
+    _guardar_qml(capa, "alfa0_trama.qml")
+
+    capa = _vectorial("lineas.shp", "Linea invisible")
+    capa.renderer().setSymbol(_linea(QColor(0, 0, 255, 0), ancho=1))
+    _guardar_qml(capa, "alfa0_linea.qml")
+
+    capa = _vectorial("puntos.shp", "Marcador hueco")
+    capa.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": "0,120,200,0", "size": "4",
+         "outline_color": "#000000", "outline_width": "0.4"}))
+    _guardar_qml(capa, "alfa0_marcador_relleno.qml")
+
+    capa = _vectorial("puntos.shp", "Marcador invisible")
+    capa.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": "0,120,200,0", "size": "4",
+         "outline_color": "0,0,0,0", "outline_width": "0.4"}))
+    _guardar_qml(capa, "alfa0_marcador_entero.qml")
+
+    capa = _vectorial("poligonos.shp", "Tramado invisible")
+    lpf = QgsLinePatternFillSymbolLayer()
+    lpf.setSubSymbol(_linea(QColor(0, 0, 0, 0), ancho=0.3))
+    lpf.setDistance(2)
+    lpf.setLineAngle(45)
+    capa.renderer().setSymbol(QgsFillSymbol(
+        [lpf, QgsSimpleLineSymbolLayer(QColor("#33a02c"), 0.26)]))
+    _guardar_qml(capa, "alfa0_tramado.qml")
+
+
+def qml_multicapa_linea_marcador():
+    """Casing de carretera: linea ancha oscura debajo y fina clara encima
+    (el caso mas comun de los proyectos reales, rechazado hasta la v0.4.0
+    con `linea con 2 symbol-layers`). Y un marcador de dos capas: circulo
+    grande rojo debajo y cuadrado pequenyo blanco encima."""
+    capa = _vectorial("lineas.shp", "Carretera con casing")
+    abajo = QgsSimpleLineSymbolLayer(QColor("#202020"), 2.0)
+    arriba = QgsSimpleLineSymbolLayer(QColor("#ffd700"), 1.0)
+    capa.renderer().setSymbol(QgsLineSymbol([abajo, arriba]))
+    _guardar_qml(capa, "linea_multicapa.qml")
+
+    from qgis.core import QgsSimpleMarkerSymbolLayer, Qgis
+    capa = _vectorial("puntos.shp", "Marcador multicapa")
+    circulo = QgsSimpleMarkerSymbolLayer(Qgis.MarkerShape.Circle, 6)
+    circulo.setColor(QColor("#e41a1c"))
+    circulo.setStrokeColor(QColor("#000000"))
+    circulo.setStrokeWidth(0.3)
+    cuadrado = QgsSimpleMarkerSymbolLayer(Qgis.MarkerShape.Square, 2.5)
+    cuadrado.setColor(QColor("#ffffff"))
+    cuadrado.setStrokeStyle(Qt.NoPen)
+    capa.renderer().setSymbol(QgsMarkerSymbol([circulo, cuadrado]))
+    _guardar_qml(capa, "marcador_multicapa.qml")
+
+
+def qml_relleno_puntos_marcador_offset():
+    """Relleno de puntos con el MARCADOR desplazado 7 mm (como la capa real
+    «Red de Corredores»): QGIS recorta el marcador en el borde de su mosaico
+    y dibuja trozos; ArcMap no puede imitarlo y se avisa."""
+    from qgis.core import QgsPointPatternFillSymbolLayer
+    capa = _vectorial("poligonos.shp", "Corredores")
+    marcador = QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": "#33a02c", "size": "0.6",
+         "outline_color": "#33a02c", "outline_width": "0.8", "offset": "7,0"})
+    ppf = QgsPointPatternFillSymbolLayer()
+    ppf.setSubSymbol(marcador)
+    ppf.setDistanceX(2.4)
+    ppf.setDistanceY(2.4)
+    capa.renderer().setSymbol(QgsFillSymbol([ppf]))
+    _guardar_qml(capa, "relleno_puntos_marcador_offset.qml")
+
+
+def _gris(nombre_fichero, raster, gradiente, algoritmo, minimo=None,
+          maximo=None):
+    """singlebandgray (banda 1) sobre un raster de tmp/regresion_qml.
+    Imprime el gris que QGIS pinta en el centro de cada celda (3x3, render
+    a 300 px): es la tabla esperada de la regresion."""
+    from qgis.core import (QgsContrastEnhancement, QgsSingleBandGrayRenderer,
+                           QgsMapSettings, QgsMapRendererParallelJob,
+                           QgsRectangle)
+    from qgis.PyQt.QtCore import QSize
+    capa = QgsRasterLayer(os.path.join(DIR_DATOS, raster), "Gris")
+    if not capa.isValid():
+        sys.exit("%s no valido (corre antes run_regresion_qml.py)" % raster)
+    render = QgsSingleBandGrayRenderer(capa.dataProvider(), 1)
+    render.setGradient(getattr(QgsSingleBandGrayRenderer, gradiente))
+    ce = QgsContrastEnhancement(capa.dataProvider().dataType(1))
+    ce.setContrastEnhancementAlgorithm(getattr(QgsContrastEnhancement,
+                                               algoritmo))
+    if minimo is not None:
+        ce.setMinimumValue(minimo)
+        ce.setMaximumValue(maximo)
+    render.setContrastEnhancement(ce)
+    capa.setRenderer(render)
+    _guardar_qml(capa, nombre_fichero)
+    ms = QgsMapSettings()
+    ms.setLayers([capa])
+    ms.setDestinationCrs(capa.crs())
+    ms.setOutputSize(QSize(300, 300))
+    ms.setExtent(QgsRectangle(600000, 4200000, 600030, 4200030))
+    job = QgsMapRendererParallelJob(ms)
+    job.start()
+    job.waitForFinished()
+    img = job.renderedImage()
+    print("   QGIS gris por celda:", [[QColor(img.pixel(50 + 100 * c,
+                                                       50 + 100 * f)).red()
+                                       for c in range(3)] for f in range(3)])
+
+
+def qml_raster_gris():
+    """singlebandgray, el renderer por defecto de un raster monobanda (MDT,
+    pendientes). Flotante con estirado min-max negro->blanco y blanco->negro,
+    y 8 bits sin realce."""
+    _gris("raster_gris.qml", "cortes.tif", "BlackToWhite",
+          "StretchToMinimumMaximum", 1.5, 45.0)
+    _gris("raster_gris_inverso.qml", "cortes.tif", "WhiteToBlack",
+          "StretchToMinimumMaximum", 1.5, 45.0)
+    _gris("raster_gris_8bits_sin_realce.qml", "rgb.tif", "BlackToWhite",
+          "NoEnhancement")
+
+
 def _guardar_qml(capa, nombre):
     salida = os.path.join(DIR_FIX, "qml", nombre)
     msg, ok = capa.saveNamedStyle(salida)
@@ -805,6 +991,74 @@ def qgz_mxd_wms():
         servidor.shutdown()
 
 
+def qgz_mxd_wms_casos():
+    """Dos casos de --agrupar-wms que la revision del PR #8 encontro mal:
+
+    mxd_wms_homonimos.qgz ("grupo"): dos grupos HERMANOS con el mismo nombre,
+    cada uno con dos WMS del mismo servicio. Son dos grupos: dos capas
+    agrupadas, cada una en el suyo.
+
+        x Ortos
+            x Parcelas A   [parcelas]
+            x Textos A     [textos]
+        x Ortos
+            x Parcelas B   [parcelas]
+            x Textos B     [textos]
+
+    mxd_wms_apagado.qgz ("proyecto"): el primer WMS del arbol esta en un grupo
+    APAGADO y el segundo, del mismo servicio, se ve. La capa agrupada tiene
+    que ir donde se ve, no dentro del grupo apagado.
+
+        - Fondo
+            x Masas fondo  [masas]
+        x Ortos
+            x Parcelas     [parcelas]
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import wms_local
+    from qgis.core import QgsCoordinateReferenceSystem
+    servidor = wms_local.arrancar()
+    try:
+        proyecto = QgsProject.instance()
+
+        def wms(nombre, capa_wms):
+            capa = QgsRasterLayer(
+                "crs=EPSG:25830&format=image/png&layers=%s&styles&url=%s"
+                % (capa_wms, wms_local.URL), nombre, "wms")
+            if not capa.isValid():
+                sys.exit("capa WMS no valida: %s" % capa.error().summary())
+            proyecto.addMapLayer(capa, False)
+            return capa
+
+        def guardar(nombre):
+            proyecto.writeEntryBool("Paths", "/Absolute", False)
+            salida = os.path.join(DIR_FIX, nombre)
+            if not proyecto.write(salida):
+                sys.exit("QgsProject.write fallo: %s" % proyecto.error())
+            print("escrito", salida)
+
+        proyecto.clear()
+        proyecto.setCrs(QgsCoordinateReferenceSystem("EPSG:25830"))
+        raiz = proyecto.layerTreeRoot()
+        for sufijo in ("A", "B"):
+            grupo = raiz.addGroup("Ortos")
+            grupo.addLayer(wms("Parcelas " + sufijo, "parcelas"))
+            grupo.addLayer(wms("Textos " + sufijo, "textos"))
+        guardar("mxd_wms_homonimos.qgz")
+
+        proyecto.clear()
+        proyecto.setCrs(QgsCoordinateReferenceSystem("EPSG:25830"))
+        raiz = proyecto.layerTreeRoot()
+        fondo = raiz.addGroup("Fondo")
+        fondo.setItemVisibilityChecked(False)
+        fondo.addLayer(wms("Masas fondo", "masas"))
+        raiz.addGroup("Ortos").addLayer(wms("Parcelas", "parcelas"))
+        guardar("mxd_wms_apagado.qgz")
+        proyecto.clear()
+    finally:
+        servidor.shutdown()
+
+
 def qgz_xyz_wmts():
     """Capas XYZ, escritas por QGIS sin conectarse (XYZ no lee nada al crear
     la capa): un GetTile KVP contra el WMTS local, un WMTS en forma REST (la
@@ -893,6 +1147,14 @@ GENERADORES = {
     "mxd_wms": qgz_mxd_wms,
     "xyz_wmts": qgz_xyz_wmts,
     "wms_capa_viva": qml_wms_capa_viva,
+    "reglas_else_dos_campos": qml_reglas_else_dos_campos,
+    "unidad_pixel": qml_unidad_pixel,
+    "relleno_offset": qml_relleno_offset,
+    "alfa_cero": qml_alfa_cero,
+    "mxd_wms_casos": qgz_mxd_wms_casos,
+    "multicapa_linea_marcador": qml_multicapa_linea_marcador,
+    "relleno_puntos_marcador_offset": qml_relleno_puntos_marcador_offset,
+    "raster_gris": qml_raster_gris,
 }
 
 

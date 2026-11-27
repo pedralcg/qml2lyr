@@ -6,7 +6,7 @@ ArcGIS 10.5 (ArcObjects). Este fichero cubre la mitad que es Python puro y
 por eso corre tambien en el CI de GitHub, en Linux: si un cambio rompe la
 lectura del XML de QGIS, salta aqui aunque nadie tenga ArcGIS a mano.
 
-Python 2.7 (el parser usa literales `ur""`, igual que el emisor):
+Python 2.7, como el emisor (el CI comprueba aparte que el parser importa en py3):
 
     python2 tests/test_parser.py
 
@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(RAIZ, "src"))
 import parser_qgis  # noqa: E402
 from modelo import (SimboloMarcador, SimboloMarcadorCaracter,  # noqa: E402
                     SimboloMultiCapa, SimboloRelleno, SimboloRellenoMarcadores,
-                    SimboloImagen,
+                    SimboloImagen, SimboloMultiCapaLinea, SimboloMultiCapaMarcador,
                     RendererValoresUnicos, SimbologiaNoSoportada)
 
 DIR_QML = os.path.join(RAIZ, "tests", "fixtures", "qml")
@@ -524,6 +524,108 @@ def test_remap(fallos):
     _igual(fallos, fuentes, [u"Q:/paleta.tif", u"Q:/poligonos.shp",
                              u"Q:/zonas.gpkg\\main.zonas"],
            u"datasources del fixture de --remap")
+
+
+def _simbolo(capa):
+    return capa.renderer.simbolo
+
+
+def test_else_dos_campos(fallos):
+    """QGIS 3.44.12: dos reglas sobre campos distintos. El ELSE es una
+    conjuncion por regla, cada una con el IS NULL de SUS campos; con la
+    formula de la v0.4.0 una entidad podia caer en una regla y en el ELSE."""
+    capas = _qml("reglas_else_dos_campos.qml")
+    _igual(fallos, [c.nombre for c in capas], [u"G uno", u"Rural", u"Resto"],
+           u"reglas")
+    _igual(fallos, capas[2].defquery,
+           u'(NOT (("G" = \'1\')) OR "G" IS NULL) AND '
+           u'(NOT (("R" = \'Rural\')) OR "R" IS NULL)', u"def-query del ELSE")
+
+
+def test_unidad_pixel(fallos):
+    """QGIS 3.44.12: tamanyo y borde del marcador en Pixel -> x0,75 pt, con
+    aviso. Hasta la v0.4.0 la capa entera fallaba."""
+    capa = _qml("unidad_pixel.qml")[0]
+    m = _simbolo(capa)
+    _cerca(fallos, m.size_pt, 6.0, u"8 px = 6 pt")
+    _cerca(fallos, m.contorno_pt, 0.75, u"1 px = 0,75 pt")
+    if not any(u"pixeles" in a for a in capa.avisos):
+        fallos.append(u"no avisa de la unidad Pixel: %r" % capa.avisos)
+
+
+def test_relleno_offset(fallos):
+    """QGIS 3.44.12: SimpleFill con offset 1,1 mm -> aviso (antes, mudo)."""
+    capa = _qml("relleno_offset.qml")[0]
+    if not any(u"relleno desplazado" in a for a in capa.avisos):
+        fallos.append(u"no avisa del offset del relleno: %r" % capa.avisos)
+
+
+def test_alfa_cero(fallos):
+    """QGIS 3.44.12: un color con alfa 0 es INVISIBLE en QGIS. Hasta la
+    v0.4.0 salia opaco y sin aviso en los cinco sitios."""
+    s = _simbolo(_qml("alfa0_contorno.qml")[0])
+    _igual(fallos, (s.style, s.contorno.style), ("solid", "no"),
+           u"contorno alfa 0 -> sin contorno")
+    s = _simbolo(_qml("alfa0_trama.qml")[0])
+    _igual(fallos, (s.style, s.rgb, s.contorno.style), ("no", None, "solid"),
+           u"trama alfa 0 -> hueco con borde")
+    s = _simbolo(_qml("alfa0_linea.qml")[0])
+    _igual(fallos, s.style, "no", u"linea alfa 0 -> sin linea")
+    s = _simbolo(_qml("alfa0_marcador_relleno.qml")[0])
+    _igual(fallos, (s.rgb, s.contorno_rgb), (None, (0, 0, 0)),
+           u"marcador con relleno alfa 0 -> solo borde")
+    s = _simbolo(_qml("alfa0_marcador_entero.qml")[0])
+    _igual(fallos, (s.rgb, s.contorno_rgb, s.contorno_pt), (None, None, 0.0),
+           u"marcador entero alfa 0 -> invisible")
+    capa = _qml("alfa0_tramado.qml")[0]
+    s = _simbolo(capa)
+    if not isinstance(s, SimboloMultiCapa) or s.capas[0].style != "no":
+        fallos.append(u"tramado con raya alfa 0 -> hueco: %r" % (s,))
+    if not any(u"raya invisible" in a for a in capa.avisos):
+        fallos.append(u"no avisa del tramado invisible: %r" % capa.avisos)
+
+
+def test_relleno_puntos_marcador_offset(fallos):
+    """QGIS 3.44.12: un relleno de puntos con el marcador desplazado sale en
+    QGIS recortado (trozos); ArcMap no lo imita: aviso especifico."""
+    capa = _qml("relleno_puntos_marcador_offset.qml")[0]
+    if not any(u"lo recorta en el borde de su mosaico" in a
+               for a in capa.avisos):
+        fallos.append(u"sin el aviso del marcador desplazado: %r" % capa.avisos)
+
+
+def test_raster_gris(fallos):
+    """QGIS 3.44.12: singlebandgray -> estirado de dos paradas con el rango
+    del contrastEnhancement; WhiteToBlack invierte las paradas; sin realce,
+    0-255. Hasta la v0.5.0 se rechazaba."""
+    r = _qml("raster_gris.qml")[0].renderer
+    _igual(fallos, (r.minimo, r.maximo, [p.rgb for p in r.paradas]),
+           (1.5, 45.0, [(0, 0, 0), (255, 255, 255)]), u"negro a blanco")
+    r = _qml("raster_gris_inverso.qml")[0].renderer
+    _igual(fallos, [p.rgb for p in r.paradas],
+           [(255, 255, 255), (0, 0, 0)], u"blanco a negro")
+    r = _qml("raster_gris_8bits_sin_realce.qml")[0].renderer
+    _igual(fallos, (r.minimo, r.maximo), (0.0, 255.0), u"sin realce: 0-255")
+
+
+def test_multicapa_linea_marcador(fallos):
+    """QGIS 3.44.12: linea de dos SimpleLine y marcador de dos SimpleMarker,
+    en el orden de dibujo de QGIS (la primera, abajo). Hasta la v0.4.0 se
+    rechazaban con `linea con 2 symbol-layers`."""
+    s = _simbolo(_qml("linea_multicapa.qml")[0])
+    if not isinstance(s, SimboloMultiCapaLinea):
+        fallos.append(u"linea: esperado multicapa, obtenido %r" % (s,))
+    else:
+        _igual(fallos, [(c.rgb, round(c.width_pt, 3)) for c in s.capas],
+               [((32, 32, 32), 5.669), ((255, 215, 0), 2.835)],
+               u"capas de la linea (ancha oscura abajo)")
+    s = _simbolo(_qml("marcador_multicapa.qml")[0])
+    if not isinstance(s, SimboloMultiCapaMarcador):
+        fallos.append(u"marcador: esperado multicapa, obtenido %r" % (s,))
+    else:
+        _igual(fallos, [(c.forma, c.rgb) for c in s.capas],
+               [("circulo", (228, 26, 28)), ("cuadrado", (255, 255, 255))],
+               u"capas del marcador (circulo abajo)")
 
 
 TESTS = [(n, f) for n, f in sorted(globals().items())

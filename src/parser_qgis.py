@@ -25,6 +25,7 @@ import xml.etree.ElementTree as ET
 
 from modelo import (Contorno, SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
+                    SimboloMultiCapaLinea, SimboloMultiCapaMarcador,
                     SimboloRellenoMarcadores,
                     RendererSimple,
                     ClaseValor, RendererValoresUnicos, ClaseRango,
@@ -41,6 +42,7 @@ except ImportError:
     from urllib.parse import unquote as _unquote  # py3
 
 _MM2PT = 2.834645669  # 1 mm = 2.834... puntos
+_PX2PT = 0.75         # 1 px a 96 dpi = 72/96 pt
 
 # Formas de SimpleMarker que ArcMap sabe representar tal cual
 _FORMAS_MARCADOR = {"circle": "circulo", "square": "cuadrado", "cross": "cruz",
@@ -220,6 +222,18 @@ def _rgb_avisando(valor, que, avisos):
     return rgb
 
 
+def _alfa(valor):
+    """Alfa (0-255) de un color de QGIS; None si no se puede leer.
+
+    Solo para DECIDIR si un elemento es invisible: un color ilegible no se
+    resuelve aqui, lo rechaza despues `_rgb` con su mensaje.
+    """
+    try:
+        return _rgb(valor, u"color")[1]
+    except SimbologiaNoSoportada:
+        return None
+
+
 def _aviso_alfa_opaco(que, alpha):
     """Texto del aviso de alfa por simbolo que ArcMap no sabe reproducir.
 
@@ -237,20 +251,34 @@ def _aviso_alfa_opaco(que, alpha):
             % (que, alpha, round(100.0 * int(alpha) / 255.0)))
 
 
-def _a_puntos(valor, unidad, que):
+def _a_puntos(valor, unidad, que, avisos):
     """Convierte una medida de QGIS a puntos respetando la unidad declarada.
 
     DECISION F2 (Pedro, 2026-07-15): se respeta la unidad. El motor original
     aplicaba el factor mm a todo, asi que una anchura declarada en Point salia
     2,83 veces mas gruesa en ArcMap que en QGIS.
+
+    `Pixel` (estilos pensados para pantalla) se convierte a 96 dpi, 1 px =
+    0,75 pt, y se avisa: en QGIS el tamanyo depende del dispositivo (en papel
+    a 300 dpi sale menor) y en ArcMap es fijo en puntos. `avisos` es
+    obligatorio para que ningun camino pueda convertir pixeles callando.
+    Las unidades de mapa (`MapUnit`, `RenderMetersInMapUnits`) y `Inch` se
+    siguen rechazando: una medida en unidades de mapa no tiene equivalente en
+    un simbolo de .lyr.
     """
     v = float(valor)
     if unidad in ("MM", "Millimeter"):
         return v * _MM2PT
     if unidad in ("Point", "Points"):
         return v
+    if unidad in ("Pixel", "Pixels"):
+        avisos.append(
+            u"%s en pixeles (%g px): se emite a 96 dpi como %.2f pt. En QGIS "
+            u"el tamanyo depende del dispositivo (en papel a 300 dpi sale "
+            u"menor); en ArcMap es fijo" % (que, v, v * _PX2PT))
+        return v * _PX2PT
     raise SimbologiaNoSoportada(
-        u"%s con unidad '%s' (solo MM y Point)" % (que, unidad))
+        u"%s con unidad '%s' (solo MM, Point y Pixel)" % (que, unidad))
 
 
 def _avisar_trazo_grueso(estilo, ancho_pt, que, avisos):
@@ -333,10 +361,14 @@ def _contorno_desde_opts(opts, avisos, prefijo="outline"):
         return Contorno(style="no")
     if estilo not in _ESTILOS_LINEA:
         raise SimbologiaNoSoportada(u"%s_style='%s'" % (prefijo, estilo))
+    if _alfa(opts.get(prefijo + "_color")) == 0:
+        # Contorno de color invisible: en QGIS no se ve. Es lo mismo que
+        # outline_style="no" (hasta la v0.4.0 salia opaco y sin aviso).
+        return Contorno(style="no")
     rgb = _rgb_avisando(opts[prefijo + "_color"], u"contorno", avisos)
     ancho = _a_puntos(opts.get(prefijo + "_width", "0.26"),
                       opts.get(prefijo + "_width_unit", "MM"),
-                      prefijo + "_width")
+                      prefijo + "_width", avisos)
     _avisar_trazo_grueso(estilo, ancho, u"contorno", avisos)
     return Contorno(rgb=rgb, width_pt=ancho, style=estilo)
 
@@ -357,9 +389,12 @@ def _linea_desde_opts(opts, avisos):
         return SimboloLinea(style="no")
     if estilo not in _ESTILOS_LINEA:
         raise SimbologiaNoSoportada(u"line_style='%s'" % estilo)
+    if _alfa(opts.get("line_color")) == 0:
+        # Linea de color invisible: igual que line_style="no".
+        return SimboloLinea(style="no")
     rgb = _rgb_avisando(opts["line_color"], u"linea", avisos)
     ancho = _a_puntos(opts.get("line_width", "0.26"),
-                      opts.get("line_width_unit", "MM"), "line_width")
+                      opts.get("line_width_unit", "MM"), "line_width", avisos)
     if _es_offset_no_nulo(opts.get("offset")):
         avisos.append(u"linea desplazada %s %s respecto al eje (offset): "
                       u"ArcMap la dibuja sobre el eje"
@@ -383,6 +418,10 @@ def _relleno_simple(opts, avisos):
     parser solo valida y deja el nombre de estilo de QGIS en el modelo.
     """
     estilo = opts.get("style", "solid")
+    if _es_offset_no_nulo(opts.get("offset")):
+        avisos.append(u"relleno desplazado %s %s respecto al poligono "
+                      u"(offset): ArcMap lo dibuja sin desplazar"
+                      % (opts.get("offset"), opts.get("offset_unit") or u""))
     if estilo in _TRAMAS_DENSAS:
         return _relleno_denso(estilo, opts, avisos)
     if estilo not in ("solid", "no") and estilo not in _TRAMAS_RELLENO:
@@ -397,8 +436,12 @@ def _relleno_simple(opts, avisos):
         elif alpha != 255:
             avisos.append(_aviso_alfa_opaco(u"relleno", alpha))
     elif estilo in _TRAMAS_RELLENO:
-        # El color del SimpleFill es el color de las lineas del tramado.
-        rgb = _rgb_avisando(opts["color"], u"relleno tramado", avisos)
+        # El color del SimpleFill es el color de las lineas del tramado. Con
+        # alfa 0 la trama no se ve: relleno hueco, como en _relleno_denso.
+        if _alfa(opts.get("color")) == 0:
+            estilo, rgb = "no", None
+        else:
+            rgb = _rgb_avisando(opts["color"], u"relleno tramado", avisos)
     return SimboloRelleno(rgb=rgb, style=estilo,
                           contorno=_contorno_desde_opts(opts, avisos))
 
@@ -450,8 +493,13 @@ def _tramado(layer_elem, avisos):
     if not isinstance(linea, SimboloLinea):
         raise SimbologiaNoSoportada(
             u"LinePatternFill con sub-simbolo %s" % type(linea).__name__)
+    if linea.style == "no":
+        # Raya invisible (alfa 0 o estilo "no"): QGIS no dibuja el tramado.
+        avisos.append(u"tramado con la raya invisible (alfa 0 o sin estilo): "
+                      u"se emite como relleno hueco")
+        return SimboloRelleno(rgb=None, style="no", contorno=Contorno(style="no"))
     separacion = _a_puntos(opts.get("distance", "5"),
-                           opts.get("distance_unit", "MM"), "distance")
+                           opts.get("distance_unit", "MM"), "distance", avisos)
     if _es_offset_no_nulo(opts.get("offset")):
         # ILineFillSymbol no tiene desplazamiento del patron: el tramado sale
         # pegado al origen. Hasta 2026-09-21 esto se perdia mudo; hay casos
@@ -501,7 +549,7 @@ def _relleno_imagen(layer_elem, avisos):
     opts = _opciones(layer_elem)
     imagen, formato = _imagen_embebida(opts.get("imageFile"), avisos)
     ancho = _a_puntos(opts.get("width", "0"),
-                      opts.get("width_unit", "Point"), "width") \
+                      opts.get("width_unit", "Point"), "width", avisos) \
         if opts.get("width") else 0.0
     alpha = opts.get("alpha")
     if alpha is not None and abs(float(alpha) - 1.0) > 1e-6:
@@ -559,10 +607,23 @@ def _relleno_puntos(layer_elem, avisos):
     if not isinstance(marcador, (SimboloMarcador, SimboloMarcadorCaracter)):
         raise SimbologiaNoSoportada(
             u"PointPatternFill con sub-simbolo %s" % type(marcador).__name__)
+    for capa_marcador in sub.findall("layer"):
+        if _es_offset_no_nulo(_opciones(capa_marcador).get("offset")):
+            # Medido por render (QGIS 3.44.12, 2026-11-27, capa real «Red de
+            # Corredores»): dentro de un relleno de puntos QGIS dibuja el
+            # patron como un mosaico y RECORTA en su borde el marcador
+            # desplazado: salen trozos («rayitas») en vez de puntos. No es
+            # el desplazamiento de filas/columnas: ese casa con ArcMap.
+            avisos.append(
+                u"relleno de puntos con el marcador desplazado (offset): QGIS "
+                u"lo recorta en el borde de su mosaico y dibuja trozos del "
+                u"marcador; ArcMap dibuja los puntos enteros, y el dibujo NO "
+                u"se parece. Quita el offset del marcador en QGIS")
+            break
 
     def medida(clave, defecto):
         return _a_puntos(opts.get(clave) or defecto,
-                         opts.get(clave + "_unit") or "MM", clave)
+                         opts.get(clave + "_unit") or "MM", clave, avisos)
     dx, dy = medida("distance_x", "3"), medida("distance_y", "3")
     if dx <= 0 or dy <= 0:
         raise SimbologiaNoSoportada(
@@ -702,72 +763,108 @@ def _simbolo_sin_opacidad(symbol_elem, avisos):
         return _simbolo_fill(layers, avisos)
 
     if tipo == "line":
-        if len(layers) > 1 or layers[0].get("class") != "SimpleLine":
+        no_simples = [l.get("class") for l in layers
+                      if l.get("class") != "SimpleLine"]
+        if no_simples:
+            # MarkerLine, HashLine, ArrowLine... no tienen traduccion
+            # verificada (docs/limitaciones.md).
             raise SimbologiaNoSoportada(
-                u"linea con %d symbol-layers (%s)"
-                % (len(layers), ", ".join(l.get("class") for l in layers)))
-        return _linea_desde_opts(_opciones(layers[0]), avisos)
+                u"linea con symbol-layers %s (solo SimpleLine, una o varias)"
+                % ", ".join(no_simples))
+        lineas = [_linea_desde_opts(_opciones(l), avisos) for l in layers]
+        if len(lineas) == 1:
+            return lineas[0]
+        # Casing de carreteras y rios: varias SimpleLine superpuestas, en el
+        # orden de dibujo de QGIS (la primera, abajo).
+        return SimboloMultiCapaLinea(lineas)
 
     if tipo == "marker":
-        if len(layers) > 1 or layers[0].get("class") != "SimpleMarker":
+        no_simples = [l.get("class") for l in layers
+                      if l.get("class") != "SimpleMarker"]
+        if no_simples:
             raise SimbologiaNoSoportada(
-                u"marcador con %d symbol-layers (%s)"
-                % (len(layers), ", ".join(l.get("class") for l in layers)))
-        opts = _opciones(layers[0])
-        forma = opts.get("name", "circle")
-        if forma not in _FORMAS_MARCADOR and forma not in _GLIFOS_MARCADOR:
-            # ArcMap solo tiene 5 formas en SimpleMarkerSymbol (circulo,
-            # cuadrado, cruz, equis, diamante). Unas pocas mas se dibujan con
-            # un glifo de ESRI Default Marker (_GLIFOS_MARCADOR). El resto
-            # (arrow, half_square, heart...) no tiene glifo verificado: no se
-            # inventa.
-            raise SimbologiaNoSoportada(
-                u"marcador de forma '%s': ArcMap solo tiene circle, square, "
-                u"cross, cross2 y diamond, y por glifo %s. Cambia la forma en "
-                u"QGIS o edita el simbolo en ArcMap"
-                % (forma, u", ".join(sorted(_GLIFOS_MARCADOR))))
-        rgb = _rgb_avisando(opts["color"], u"marcador", avisos)
-        tam = _a_puntos(opts.get("size", "2"), opts.get("size_unit", "MM"), "size")
-        ancho_contorno = _a_puntos(opts.get("outline_width", "0"),
-                                   opts.get("outline_width_unit", "MM"),
-                                   "outline_width")
-        contorno_rgb = None
-        if ancho_contorno > 0 and opts.get("outline_style", "solid") != "no":
-            contorno_rgb = _rgb_avisando(opts["outline_color"],
-                                         u"contorno del marcador", avisos)
-        else:
-            if ancho_contorno == 0 and opts.get("outline_style", "solid") != "no":
-                # DECISION (2026-09-20): QGIS dibuja el borde de ancho 0 como
-                # hairline (pluma cosmetica de 1 px); ArcMap no tiene hairline
-                # y un OutlineSize minimo inventado engordaria el simbolo a
-                # cualquier escala de impresion. Se emite SIN borde y se avisa.
-                avisos.append(
-                    u"borde del marcador con ancho 0 y estilo '%s': QGIS lo "
-                    u"dibuja como linea fina de 1 px (hairline) y el .lyr sale "
-                    u"SIN borde; ponle un ancho explicito en QGIS si lo quieres"
-                    % opts.get("outline_style", "solid"))
-            ancho_contorno = 0.0
-        if _es_offset_no_nulo(opts.get("offset")):
-            avisos.append(u"marcador desplazado %s %s respecto al punto "
-                          u"(offset): ArcMap lo dibuja centrado"
-                          % (opts.get("offset"), opts.get("offset_unit") or u""))
-        angulo = float(opts.get("angle", "0") or 0)
-        if forma in _GLIFOS_MARCADOR:
-            codigo, lado, giro_extra = _GLIFOS_MARCADOR[forma]
-            avisos.append(
-                u"marcador '%s' dibujado con un glifo de la fuente ESRI Default "
-                u"Marker: tamanyo aproximado%s"
-                % (forma, u", y el borde sale como halo por fuera de la forma"
-                          if contorno_rgb else u""))
-            return SimboloMarcadorCaracter(
-                rgb=rgb, size_pt=tam / lado, char_relleno=codigo,
-                contorno_rgb=contorno_rgb, contorno_pt=ancho_contorno,
-                angulo=(angulo + giro_extra) % 360.0)
-        return SimboloMarcador(rgb=rgb, size_pt=tam, forma=_FORMAS_MARCADOR[forma],
-                               contorno_rgb=contorno_rgb, contorno_pt=ancho_contorno,
-                               angulo=angulo)
+                u"marcador con symbol-layers %s (solo SimpleMarker, uno o "
+                u"varios)" % ", ".join(no_simples))
+        marcadores = [_marcador_desde_opts(_opciones(l), avisos)
+                      for l in layers]
+        if len(marcadores) == 1:
+            return marcadores[0]
+        for m in marcadores:
+            if isinstance(m, SimboloMarcadorCaracter) and m.contorno_rgb:
+                # El borde del glifo es un HALO del multicapa que lo envuelve
+                # (emisor); dentro de otro multicapa no hay donde ponerlo.
+                avisos.append(u"glifo con borde dentro de un marcador "
+                              u"multicapa: el borde (halo) no se emite")
+                m.contorno_rgb, m.contorno_pt = None, 0.0
+        return SimboloMultiCapaMarcador(marcadores)
 
     raise SimbologiaNoSoportada(u"symbol type='%s'" % tipo)
+
+
+def _marcador_desde_opts(opts, avisos):
+    """Lee un symbol-layer SimpleMarker -> SimboloMarcador o, si la forma solo
+    existe como glifo en ArcMap, SimboloMarcadorCaracter."""
+    forma = opts.get("name", "circle")
+    if forma not in _FORMAS_MARCADOR and forma not in _GLIFOS_MARCADOR:
+        # ArcMap solo tiene 5 formas en SimpleMarkerSymbol (circulo,
+        # cuadrado, cruz, equis, diamante). Unas pocas mas se dibujan con
+        # un glifo de ESRI Default Marker (_GLIFOS_MARCADOR). El resto
+        # (arrow, half_square, heart...) no tiene glifo verificado: no se
+        # inventa.
+        raise SimbologiaNoSoportada(
+            u"marcador de forma '%s': ArcMap solo tiene circle, square, "
+            u"cross, cross2 y diamond, y por glifo %s. Cambia la forma en "
+            u"QGIS o edita el simbolo en ArcMap"
+            % (forma, u", ".join(sorted(_GLIFOS_MARCADOR))))
+    # Relleno de color invisible: ArcMap dibuja solo el borde (NullColor).
+    if _alfa(opts.get("color")) == 0:
+        rgb = None
+    else:
+        rgb = _rgb_avisando(opts["color"], u"marcador", avisos)
+    tam = _a_puntos(opts.get("size", "2"), opts.get("size_unit", "MM"),
+                    "size", avisos)
+    ancho_contorno = _a_puntos(opts.get("outline_width", "0"),
+                               opts.get("outline_width_unit", "MM"),
+                               "outline_width", avisos)
+    contorno_rgb = None
+    if ancho_contorno > 0 and opts.get("outline_style", "solid") != "no" \
+            and _alfa(opts.get("outline_color")) == 0:
+        # Borde invisible: sin borde, fiel a QGIS y sin aviso.
+        ancho_contorno = 0.0
+    elif ancho_contorno > 0 and opts.get("outline_style", "solid") != "no":
+        contorno_rgb = _rgb_avisando(opts["outline_color"],
+                                     u"contorno del marcador", avisos)
+    else:
+        if ancho_contorno == 0 and opts.get("outline_style", "solid") != "no":
+            # DECISION (2026-09-20): QGIS dibuja el borde de ancho 0 como
+            # hairline (pluma cosmetica de 1 px); ArcMap no tiene hairline
+            # y un OutlineSize minimo inventado engordaria el simbolo a
+            # cualquier escala de impresion. Se emite SIN borde y se avisa.
+            avisos.append(
+                u"borde del marcador con ancho 0 y estilo '%s': QGIS lo "
+                u"dibuja como linea fina de 1 px (hairline) y el .lyr sale "
+                u"SIN borde; ponle un ancho explicito en QGIS si lo quieres"
+                % opts.get("outline_style", "solid"))
+        ancho_contorno = 0.0
+    if _es_offset_no_nulo(opts.get("offset")):
+        avisos.append(u"marcador desplazado %s %s respecto al punto "
+                      u"(offset): ArcMap lo dibuja centrado"
+                      % (opts.get("offset"), opts.get("offset_unit") or u""))
+    angulo = float(opts.get("angle", "0") or 0)
+    if forma in _GLIFOS_MARCADOR:
+        codigo, lado, giro_extra = _GLIFOS_MARCADOR[forma]
+        avisos.append(
+            u"marcador '%s' dibujado con un glifo de la fuente ESRI Default "
+            u"Marker: tamanyo aproximado%s"
+            % (forma, u", y el borde sale como halo por fuera de la forma"
+                      if contorno_rgb else u""))
+        return SimboloMarcadorCaracter(
+            rgb=rgb, size_pt=tam / lado, char_relleno=codigo,
+            contorno_rgb=contorno_rgb, contorno_pt=ancho_contorno,
+            angulo=(angulo + giro_extra) % 360.0)
+    return SimboloMarcador(rgb=rgb, size_pt=tam, forma=_FORMAS_MARCADOR[forma],
+                           contorno_rgb=contorno_rgb, contorno_pt=ancho_contorno,
+                           angulo=angulo)
 
 
 def _simbolos_por_nombre(rend_elem, avisos, solo=None):
@@ -792,7 +889,7 @@ def _simbolos_por_nombre(rend_elem, avisos, solo=None):
 # sigue con letras, digitos o '_'. Con el patron ASCII anterior, un campo
 # legitimo como 'Año' o 'Señal' se rechazaba con el mensaje "categorizado por
 # expresion", que mandaba a buscar una expresion inexistente.
-_RE_CAMPO = re.compile(ur"^[^\W\d]\w*$", re.UNICODE)
+_RE_CAMPO = re.compile(u"^[^\\W\\d]\\w*$", re.UNICODE)
 
 
 def _campo(attr, que=u"renderer"):
@@ -858,8 +955,8 @@ def _partir_nivel_superior(texto, sep):
     return trozos
 
 
-_RE_LITERAL = re.compile(ur"^'((?:[^']|'')*)'$")
-_RE_COALESCE = re.compile(ur"^coalesce\s*\((.*)\)$", re.IGNORECASE)
+_RE_LITERAL = re.compile(u"^'((?:[^']|'')*)'$")
+_RE_COALESCE = re.compile(u"^coalesce\\s*\\((.*)\\)$", re.IGNORECASE)
 
 
 def _termino_concat(termino):
@@ -898,7 +995,7 @@ def _expresion_multicampo(attr):
     attr = (attr or u"").strip()
     if isinstance(attr, bytes):
         attr = attr.decode("utf-8")
-    m = re.match(ur"^concat\s*\((.*)\)$", attr, re.IGNORECASE | re.DOTALL)
+    m = re.match(u"^concat\\s*\\((.*)\\)$", attr, re.IGNORECASE | re.DOTALL)
     if m:
         terminos, con_concat = _partir_nivel_superior(m.group(1), u","), True
     else:
@@ -1292,6 +1389,62 @@ def _pseudocolor_interpolado(rr_elem, shader, ocultos, avisos):
     return RendererRasterEstirado(minimo=minimo, maximo=maximo, paradas=paradas)
 
 
+def _gris_banda_unica(rr_elem, ocultos, avisos):
+    """<rasterrenderer type="singlebandgray"> -> RendererRasterEstirado de
+    dos paradas, negro->blanco (`gradient="BlackToWhite"`) o al reves.
+
+    Es el renderer POR DEFECTO de cualquier raster monobanda en QGIS (MDT,
+    pendientes, orientaciones). El rango sale de <contrastEnhancement>; sin
+    realce (`NoEnhancement`) QGIS pinta el valor tal cual, 0-255. El emisor
+    estira sobre el min/max del DATASET y avisa si no coincide con este rango
+    (lo normal si QGIS usa el corte acumulado 2-98 %, su valor por defecto).
+    Medido por render el 2026-11-27 contra QGIS 3.44.12: mismo gris por
+    celda en flotante, en las dos direcciones y en 8 bits sin realce.
+
+    `hillshade` no pasa por aqui: ArcMap 10.5 no tiene un renderer de
+    sombreado al vuelo (docs/limitaciones.md)."""
+    if (rr_elem.get("grayBand") or "1") != "1":
+        avisos.append(u"gris sobre la banda %s: ArcMap estira la banda 1"
+                      % rr_elem.get("grayBand"))
+    ce = rr_elem.find("contrastEnhancement")
+    algoritmo = ce.findtext("algorithm") if ce is not None else None
+    if algoritmo in (None, "NoEnhancement"):
+        minimo, maximo = 0.0, 255.0
+    elif algoritmo in ("StretchToMinimumMaximum",
+                       "StretchAndClipToMinimumMaximum",
+                       "ClipToMinimumMaximum"):
+        try:
+            minimo = float(ce.findtext("minValue"))
+            maximo = float(ce.findtext("maxValue"))
+        except (TypeError, ValueError):
+            raise SimbologiaNoSoportada(u"gris con minimo/maximo ilegibles")
+        if algoritmo != "StretchToMinimumMaximum":
+            avisos.append(u"gris con realce '%s': QGIS deja transparente lo que "
+                          u"cae fuera de %g..%g; ArcMap lo pinta en negro o "
+                          u"blanco" % (algoritmo, minimo, maximo))
+    else:
+        raise SimbologiaNoSoportada(
+            u"gris con realce '%s' (solo sin realce y estirados min-max)"
+            % algoritmo)
+    if maximo <= minimo:
+        raise SimbologiaNoSoportada(u"gris con rango invalido (%g..%g)"
+                                    % (minimo, maximo))
+    if ocultos:
+        avisos.append(u"QGIS oculta los valores %s: un estirado de ArcMap no "
+                      u"puede ocultar valores sueltos"
+                      % u", ".join(str(v) for v in sorted(ocultos)))
+    negro, blanco = (0, 0, 0), (255, 255, 255)
+    gradiente = rr_elem.get("gradient") or "BlackToWhite"
+    if gradiente == "WhiteToBlack":
+        negro, blanco = blanco, negro
+    elif gradiente != "BlackToWhite":
+        raise SimbologiaNoSoportada(u"gris con gradiente '%s'" % gradiente)
+    return RendererRasterEstirado(
+        minimo=minimo, maximo=maximo,
+        paradas=[ParadaColor(minimo, negro, u"%g" % minimo),
+                 ParadaColor(maximo, blanco, u"%g" % maximo)])
+
+
 def _renderer_raster(rr_elem, avisos):
     """<rasterrenderer> -> renderer del modelo. paletted, pseudocolor DISCRETE
     (clases) y pseudocolor INTERPOLATED (estirado)."""
@@ -1362,6 +1515,9 @@ def _renderer_raster(rr_elem, avisos):
         clases.sort(key=lambda c: c.superior)
         return RendererRasterCortes(clases=clases)
 
+    if tipo == "singlebandgray":
+        return _gris_banda_unica(rr_elem, ocultos, avisos)
+
     raise SimbologiaNoSoportada(u"rasterrenderer type='%s'" % tipo)
 
 
@@ -1379,19 +1535,28 @@ def _defquery_else(filtros):
     """Filtro de la regla ELSE = lo que no casa con ninguna otra regla.
 
     En SQL, NOT(campo LIKE x) es NULL cuando campo es NULL, asi que la fila se
-    perderia; QGIS en cambio SI la mete en el ELSE. Por eso se anyade el
-    IS NULL de cada campo citado.
+    perderia; QGIS en cambio SI la mete en el ELSE. Por eso cada regla lleva
+    el IS NULL de SUS campos citados.
+
+    Es una CONJUNCION por regla: `(NOT (f1) OR "A" IS NULL) AND (NOT (f2) OR
+    "B" IS NULL)`. Hasta la v0.4.0 era `NOT (f1 OR f2) OR "A" IS NULL OR "B"
+    IS NULL`, y una entidad con A nulo que SI casaba con la regla 2 entraba
+    tambien en el ELSE: ArcMap la dibujaba con dos .lyr (medido con arcpy
+    sobre una GDB, auditoria 2026-10-25).
     """
     if not filtros:
         raise SimbologiaNoSoportada(u"regla ELSE sin reglas hermanas")
-    union = u" OR ".join(u"(%s)" % f for f in filtros)
-    partes = [u"NOT (%s)" % union]
+    conjuncion = []
     for filtro in filtros:
+        partes = [u"NOT ((%s))" % filtro]
         for campo in _campos_citados(filtro):
             parte = u'"%s" IS NULL' % campo
             if parte not in partes:
                 partes.append(parte)
-    return u" OR ".join(partes)
+        conjuncion.append(u" OR ".join(partes))
+    if len(conjuncion) == 1:
+        return conjuncion[0]
+    return u" AND ".join(u"(%s)" % c for c in conjuncion)
 
 
 def _regla_activa(regla):
@@ -1683,7 +1848,7 @@ def _expresion_etiqueta(texto, es_expresion, avisos):
         return None
     if not es_expresion:
         return u"[%s]" % texto
-    m = re.match(ur"^concat\s*\((.*)\)$", texto, re.IGNORECASE | re.DOTALL)
+    m = re.match(u"^concat\\s*\\((.*)\\)$", texto, re.IGNORECASE | re.DOTALL)
     if m:
         terminos, con_barras = _partir_nivel_superior(m.group(1), u","), False
     else:
@@ -1752,7 +1917,7 @@ def _etiquetado(elem, avisos):
     try:
         tamano = _a_puntos(estilo.get("fontSize") or 10,
                            estilo.get("fontSizeUnit") or u"Point",
-                           u"tamano de etiqueta")
+                           u"tamano de etiqueta", avisos)
         color, alfa = _rgb(estilo.get("textColor"), u"color de etiqueta")
         halo = None
         # <text-buffer> cuelga DENTRO de <text-style> (QGIS 3.44).
@@ -1762,7 +1927,7 @@ def _etiquetado(elem, avisos):
                                        u"color del halo")
             halo = (_a_puntos(buf.get("bufferSize") or 1,
                               buf.get("bufferSizeUnits") or u"MM",
-                              u"tamano del halo"), halo_rgb)
+                              u"tamano del halo", avisos), halo_rgb)
             if halo_alfa != 255 or \
                     float(buf.get("bufferOpacity") or 1) < 1:
                 avisos.append(u"halo de etiqueta semitransparente: ArcMap lo "

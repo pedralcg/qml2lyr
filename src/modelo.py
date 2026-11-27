@@ -168,6 +168,29 @@ class SimboloMultiCapa(_Simbolo):
         self.capas = capas
 
 
+class SimboloMultiCapaLinea(_Simbolo):
+    """Linea con varias symbol-layers SimpleLine -> MultiLayerLineSymbol.
+
+    Es el «casing» de carreteras y rios: una linea ancha oscura debajo y una
+    fina clara encima. `capas` (SimboloLinea) va en ORDEN DE DIBUJO de QGIS:
+    la primera es la de abajo.
+    """
+
+    def __init__(self, capas):
+        self.capas = capas
+
+
+class SimboloMultiCapaMarcador(_Simbolo):
+    """Marcador con varias symbol-layers -> MultiLayerMarkerSymbol.
+
+    `capas` (SimboloMarcador o SimboloMarcadorCaracter) va en ORDEN DE DIBUJO
+    de QGIS: la primera es la de abajo.
+    """
+
+    def __init__(self, capas):
+        self.capas = capas
+
+
 class RendererSimple(object):
     """singleSymbol de QGIS -> SimpleRenderer de ArcMap."""
 

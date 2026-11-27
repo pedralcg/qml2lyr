@@ -37,14 +37,14 @@ estilo por defecto.
 |---|---|
 | **Renderers** | símbolo único, categorizado (también por la concatenación de 2 o 3 campos), graduado y basado en reglas (un `.lyr` por regla, con su definition query) |
 | **Relleno** | sólido, hueco, tramado (6 patrones), tramas densas (`dense1-7`), multicapa, relleno con imagen, relleno de puntos (también con filas o columnas desplazadas) |
-| **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot` |
-| **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación |
+| **Línea** | `solid`, `dash`, `dot`, `dash dot`, `dash dot dot`; varias superpuestas (el *casing* de carreteras y ríos) |
+| **Marcador** | círculo, cuadrado, cruz, equis y diamante; triángulo, pentágono, hexágono, octógono y estrella con glifos de la fuente *ESRI Default Marker*; rotación; varios superpuestos |
 | **Capa** | definition query, opacidad de capa (y la de símbolo cuando es la misma en todas las clases), visibilidad por escala |
 | **Etiquetas** | etiquetado simple: campo o concatenación, fuente, tamaño, color, negrita, cursiva, halo y escalas |
-| **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), RGB (bandas y estirado entre mínimo y máximo) |
+| **Ráster** | paletado (valores únicos), pseudocolor discreto (clases) e interpolado (estirado), gris de banda única (MDT, pendientes), RGB (bandas y estirado entre mínimo y máximo) |
 | **Datos** | shapefile, ráster de fichero y GeoPackage |
 | **Servicios** | WMS (con las subcapas que pide QGIS encendidas) y WMTS, también el que QGIS carga como XYZ con una URL `GetTile` |
-| **Proyecto** | el `.qgz` entero a un `.mxd`: grupos, orden, visibilidad, SRC y extensión (plugin y `--mxd`) |
+| **Proyecto** | el `.qgz` entero a un `.mxd`: grupos, orden, visibilidad, SRC y extensión (plugin y `--mxd`), y un `.lyr` por grupo de primer nivel para añadirlo a un ArcMap abierto |
 
 Lo que **no** convierte (etiquetado por reglas, expresiones, propiedades
 definidas por datos, ArcGIS Pro `.lyrx`…) y por qué está en [`docs/limitaciones.md`](docs/limitaciones.md).
