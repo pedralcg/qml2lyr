@@ -20,10 +20,12 @@ import contextlib
 import hashlib
 import json
 import re as _re
+import unicodedata
 
 from modelo import (SimboloRelleno, SimboloLinea, SimboloMarcador,
                     SimboloMarcadorCaracter, SimboloTramado, SimboloImagen, SimboloMultiCapa,
-                    SimboloRellenoMarcadores,
+                    SimboloRellenoMarcadores, SimboloMultiCapaLinea,
+                    SimboloMultiCapaMarcador,
                     RendererSimple, RendererValoresUnicos, RendererGraduado,
                     RendererRasterValoresUnicos, RendererRasterCortes,
                     RendererRasterEstirado, RendererRasterRGB,
@@ -113,6 +115,16 @@ def _color(rgb, alpha=255):
     if alpha == 0:
         c.NullColor = True
     return c
+
+
+def _color_o_nulo(rgb):
+    """Color de RELLENO de un marcador: `rgb=None` es un relleno invisible
+    (alfa 0 en QGIS) y sale como NullColor, de modo que ArcMap dibuja solo el
+    borde. Solo para los marcadores: en el resto, un rgb None es un cableado
+    roto y `_color` revienta."""
+    if rgb is None:
+        return _color((0, 0, 0), alpha=0)
+    return _color(rgb)
 
 
 # Trama de relleno QGIS -> nombre del miembro esriSimpleFillStyle.
@@ -223,7 +235,8 @@ def _simbolo(simbolo):
             fs.Color = _color(simbolo.rgb)
         else:
             # Tramado: el estilo esriSFS pinta las lineas del patron con Color.
-            fs.Style = getattr(D, _TRAMAS_RELLENO_AO[simbolo.style])
+            fs.Style = getattr(D, _enum(_TRAMAS_RELLENO_AO, simbolo.style,
+                                        u"trama de relleno"))
             fs.Color = _color(simbolo.rgb)
         fs.Outline = _contorno(simbolo.contorno)
         return _qi_exig(fs, D.ISymbol)
@@ -257,6 +270,22 @@ def _simbolo(simbolo):
             ml.AddLayer(_qi_exig(_simbolo(capa), D.IFillSymbol))
         return _qi_exig(ml, D.ISymbol)
 
+    if isinstance(simbolo, SimboloMultiCapaLinea):
+        # Mismo gotcha que el relleno: AddLayer inserta en el indice 0 (la
+        # capa de ARRIBA). Anyadir en el orden de QGIS deja la ultima
+        # symbol-layer de QGIS encima, como alli.
+        ml = _nobj(D.MultiLayerLineSymbol, D.IMultiLayerLineSymbol)
+        for capa in simbolo.capas:
+            ml.AddLayer(_qi_exig(_linea_simple(capa.rgb, capa.width_pt,
+                                               capa.style), D.ILineSymbol))
+        return _qi_exig(ml, D.ISymbol)
+
+    if isinstance(simbolo, SimboloMultiCapaMarcador):
+        ml = _nobj(D.MultiLayerMarkerSymbol, D.IMultiLayerMarkerSymbol)
+        for capa in simbolo.capas:
+            ml.AddLayer(_qi_exig(_simbolo(capa), D.IMarkerSymbol))
+        return _qi_exig(ml, D.ISymbol)
+
     if isinstance(simbolo, SimboloImagen):
         return _qi_exig(_simbolo_imagen(simbolo), D.ISymbol)
 
@@ -275,7 +304,7 @@ def _simbolo(simbolo):
     if isinstance(simbolo, SimboloMarcador):
         ms = _nobj(D.SimpleMarkerSymbol, D.ISimpleMarkerSymbol)
         ms.Style = _enum(_ESTILOS_MARCADOR, simbolo.forma, u"forma de marcador")
-        ms.Color = _color(simbolo.rgb)
+        ms.Color = _color_o_nulo(simbolo.rgb)
         ms.Size = float(simbolo.size_pt)
         # Rotacion: ISimpleMarkerSymbol expone Angle y el .lyr la conserva
         # (verificado por ida y vuelta el 2026-09-20). Solo se toca si hay
@@ -329,7 +358,7 @@ def _marcador_caracter(fuente, codigo, size_pt, rgb, angulo):
     cm = _nobj(D.CharacterMarkerSymbol, D.ICharacterMarkerSymbol)
     cm.Font = font
     cm.CharacterIndex = int(codigo)
-    cm.Color = _color(rgb)
+    cm.Color = _color_o_nulo(rgb)
     cm.Size = float(size_pt)
     if angulo:
         cm.Angle = _angulo_arcmap(angulo)
@@ -547,16 +576,44 @@ def _renderer_rgb(renderer_modelo, raster, avisos):
     return rr
 
 
-def _rampa_multiparte(paradas, minimo, maximo, resolucion=256):
+#: Subtramos por tramo de la rampa: ver `_rampa_multiparte`.
+_SUBTRAMOS_RAMPA = 32
+
+
+def _subdividir_paradas(paradas, n):
+    """Parte cada tramo entre paradas en `n` subtramos con los extremos
+    interpolados LINEALMENTE EN RGB, que es como interpola QGIS."""
+    from modelo import ParadaColor
+    fuera = [paradas[0]]
+    for a, b in zip(paradas, paradas[1:]):
+        for k in range(1, n + 1):
+            t = float(k) / n
+            fuera.append(ParadaColor(
+                a.valor + (b.valor - a.valor) * t,
+                tuple(int(round(ca + (cb - ca) * t))
+                      for ca, cb in zip(a.rgb, b.rgb))))
+    return fuera
+
+
+def _rampa_multiparte(paradas, minimo, maximo, resolucion=4096):
     """Paradas de color de QGIS -> IColorRamp multiparte para el estirado.
 
-    Una IAlgorithmicColorRamp por tramo entre paradas consecutivas, con
-    algoritmo LINEAL (QGIS interpola en RGB), y con tantos colores como su
-    fraccion del rango total (asi los tramos desiguales reparten bien). El
-    estirado luego muestrea esta rampa sobre [minimo, maximo].
+    QGIS interpola el color LINEALMENTE EN RGB, y ArcObjects no tiene ese
+    algoritmo: solo HSV, CIELab y LabLCh. Hasta la v0.5.0 se pedia un
+    `esriLinearAlgorithm` que no existe y `getattr(..., 2)` caia en silencio
+    en LabLCh: un gris 128 de QGIS salia 99 en ArcMap (medido por render el
+    2026-11-27, renderer singlebandgray). Ahora cada tramo se parte en
+    `_SUBTRAMOS_RAMPA` subtramos con los extremos interpolados en RGB; dentro
+    de un subtramo tan corto el algoritmo de ArcObjects (HSV) ya no se
+    separa de la recta en mas de un nivel.
+
+    Cada subtramo lleva tantos colores como su fraccion del rango total (asi
+    los tramos desiguales reparten bien). El estirado luego muestrea esta
+    rampa sobre [minimo, maximo].
     """
     D, _ = _mods()
-    algoritmo = getattr(D, "esriLinearAlgorithm", 2)
+    algoritmo = D.esriHSVAlgorithm
+    paradas = _subdividir_paradas(paradas, _SUBTRAMOS_RAMPA)
     multi = _nobj(D.MultiPartColorRamp, D.IMultiPartColorRamp)
     ancho_total = float(maximo - minimo)
     total = 0
@@ -938,9 +995,21 @@ def emitir(capa_estilo, ruta_dato, ruta_lyr_salida, dir_tmp):
         layer.MaximumScale = float(capa_estilo.escala_max)
 
     if capa_estilo.etiquetado is not None and not es_raster:
-        with _paso(u"etiquetas"):
-            _etiquetar(_qi_exig(layer, CA.IGeoFeatureLayer),
-                       capa_estilo.etiquetado)
+        # Las etiquetas son secundarias, como en el parser (`_etiquetado`
+        # avisa y devuelve None ante lo que no traduce): un fallo de
+        # ArcObjects al etiquetar deja la capa SIN etiquetas y con aviso, no
+        # tumba una simbologia que ya estaba bien (auditoria 2026-10-25).
+        geo = _qi_exig(layer, CA.IGeoFeatureLayer)
+        try:
+            with _paso(u"etiquetas"):
+                _etiquetar(geo, capa_estilo.etiquetado)
+        except (RuntimeError, SimbologiaNoSoportada) as e:
+            # Si _etiquetar fallo a medias, que no quede nada a medio poner.
+            # Si ni esto se puede, la capa falla: mejor que un .lyr dudoso.
+            geo.AnnotationProperties.Clear()
+            geo.DisplayAnnotation = False
+            capa_estilo.avisos.append(u"etiquetas no emitidas: %s"
+                                      % _texto_error(e))
 
     if capa_estilo.defquery:
         fld = _qi(layer, CA.IFeatureLayerDefinition)
@@ -1017,8 +1086,14 @@ def _texto_error(e):
 
 
 def _nombre_fichero(nombre):
-    """Nombre de capa -> nombre de fichero seguro (sin caracteres problematicos)."""
-    limpio = _re.sub(u"[^0-9A-Za-z._-]+", u"_", nombre or u"capa").strip(u"_")
+    """Nombre de capa -> nombre de fichero seguro (sin caracteres problematicos).
+
+    Las tildes se transliteran antes de sanear ("Vias", no "V_as"). El plugin
+    tiene la misma funcion (otro runtime): cambiar las dos a la vez.
+    """
+    plano = u"".join(c for c in unicodedata.normalize(u"NFKD", _u(nombre) or u"capa")
+                     if not unicodedata.combining(c))
+    limpio = _re.sub(u"[^0-9A-Za-z._-]+", u"_", plano).strip(u"_")
     return limpio or u"capa"
 
 
@@ -1436,7 +1511,10 @@ def _plan_agrupar_wms(arbol, maplayers, por_id, modo):
     def recorrer(nodos, ruta, visible_arriba):
         for nodo in nodos:
             if "grupo" in nodo:
-                recorrer(nodo["hijos"], ruta + (nodo["grupo"],),
+                # La ruta es la IDENTIDAD del nodo, no su nombre: dos grupos
+                # hermanos con el mismo nombre son dos grupos, y en "grupo"
+                # el arbol no puede cambiar (revision del PR #8).
+                recorrer(nodo["hijos"], ruta + (id(nodo),),
                          visible_arriba and nodo["visible"])
                 continue
             ml = maplayers.get(nodo["id"])
@@ -1469,6 +1547,15 @@ def _plan_agrupar_wms(arbol, maplayers, por_id, modo):
         c = conjuntos[clave]
         if len(c["miembros"]) < 2:
             continue
+        if modo == "proyecto":
+            # La capa agrupada va donde esta el miembros[0]. Si ese esta en un
+            # grupo APAGADO y otro miembro se ve, en ArcMap no se veria nada:
+            # la pone el primero que se ve (su visibilidad ya es la efectiva).
+            primera = next((i for i, (_, v) in enumerate(c["miembros"]) if v),
+                           0)
+            if primera:
+                for lista in (c["miembros"], c["capas"]):
+                    lista.insert(0, lista.pop(primera))
         encendidas = []
         for (nodo, visible), capas in zip(c["miembros"], c["capas"]):
             if visible:
@@ -1751,7 +1838,45 @@ def emitir_mxd(ruta_qgz, ruta_mxd, plantilla=None, remap=None, dir_tmp=None,
                           "tipo_error": "VerificacionFallida"})
         return resultado
     resultado["ok"] = True
+    n_plantilla = len([c for c in previas if u"\\" not in c.longName])
+    try:
+        resultado["lyr_primer_nivel"] = _lyr_primer_nivel(ruta_mxd, dir_lyr,
+                                                          n_plantilla)
+    except Exception as e:
+        # El .mxd ya esta hecho y verificado: esto es un extra, no lo tumba.
+        avisos.append(u"no se pudieron escribir los .lyr de primer nivel: %s"
+                      % _texto_error(e))
     return resultado
+
+
+def _lyr_primer_nivel(ruta_mxd, dir_lyr, n_plantilla):
+    """Un .lyr por nodo de PRIMER NIVEL del .mxd ya guardado (grupo entero o
+    capa suelta), `NN_<nombre>.lyr` en el orden del arbol, en `dir_lyr`.
+
+    Es el camino a un ArcMap ABIERTO: `add_layer(NN_grupo.lyr)` mete el grupo
+    con su arbol, simbologia y visibilidades, sin abrir otro documento. Hasta
+    la v0.5.0 habia que abrir el .mxd con arcpy y hacer `saveACopy` de cada
+    capa a mano (ID2026_043, 2026-11-26). Las capas de la plantilla, que van
+    al final, no se escriben. -> lista de rutas, en orden."""
+    import arcpy
+    mxd = arcpy.mapping.MapDocument(ruta_mxd)
+    try:
+        df = arcpy.mapping.ListDataFrames(mxd)[0]
+        primer_nivel = [c for c in arcpy.mapping.ListLayers(mxd, "", df)
+                        if u"\\" not in c.longName]
+        if n_plantilla:
+            primer_nivel = primer_nivel[:-n_plantilla]
+        rutas = []
+        for i, capa in enumerate(primer_nivel, 1):
+            ruta = os.path.join(dir_lyr, u"%02d_%s.lyr"
+                                % (i, _nombre_fichero(capa.name)))
+            if os.path.exists(ruta):
+                os.remove(ruta)
+            capa.saveACopy(ruta)
+            rutas.append(ruta)
+        return rutas
+    finally:
+        del mxd
 
 
 def _imprimir_json(obj):

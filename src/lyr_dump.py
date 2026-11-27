@@ -39,17 +39,65 @@ def _dump_color(color_obj):
             "nulo": bool(c.NullColor)}
 
 
-def _dump_linea(sym):
+def _patron_linea(sym):
+    """Patron de guiones de una linea cartografica (`ILineProperties.Template`)
+    -> {"patron": [(marca, hueco), ...], "intervalo": x}, o {} si es continua.
+
+    Un Template nulo es una linea CONTINUA, pero leerlo revienta con
+    «NULL COM pointer access» en vez de devolver None (visto en «Camino
+    forestal» de una Base Cartografica, 2026-11-26)."""
     D, _ = _mods()
+    props = _qi(sym, D.ILineProperties)
+    if props is None:
+        return {}
+    try:
+        plantilla = props.Template
+        n = plantilla.PatternElementCount
+    except ValueError:
+        return {}
+    if not n:
+        return {}
+    return {"patron": [[round(x, 3) for x in plantilla.GetPatternElement(k)]
+                       for k in range(n)],
+            "intervalo": round(plantilla.Interval, 3)}
+
+
+def _dump_linea(sym):
+    """Cualquier ILineSymbol -> dict. Lo que no se reconoce sale como
+    `no-soportado` con su clase: un volcado que devolviera el nombre del
+    puntero haria pasar por iguales dos contornos distintos en la regresion.
+
+    El multicapa se prueba el PRIMERO. Sus capas van en el orden de
+    ArcObjects: la 0 es la de ARRIBA, al reves que en QGIS. HashLine y
+    MarkerLine solo se identifican."""
+    if sym is None:
+        return None
+    D, _ = _mods()
+    ml = _qi(sym, D.IMultiLayerLineSymbol)
+    if ml is not None:
+        return {"tipo": "MultiLayerLine",
+                "capas": [_dump_linea(ml.Layer[i])
+                          for i in range(ml.LayerCount)]}
     ls = _qi(sym, D.ISimpleLineSymbol)
-    if ls is None:
-        return {"tipo": type(sym).__name__}
-    d = {"tipo": "SimpleLine",
-         "estilo": _NOMBRE_ESTILO_LINEA.get(ls.Style, ls.Style)}
-    if d["estilo"] != "no":
-        d["color"] = _dump_color(ls.Color)
-        d["ancho_pt"] = round(ls.Width, 3)
-    return d
+    if ls is not None:
+        d = {"tipo": "SimpleLine",
+             "estilo": _NOMBRE_ESTILO_LINEA.get(ls.Style, ls.Style)}
+        if d["estilo"] != "no":
+            d["color"] = _dump_color(ls.Color)
+            d["ancho_pt"] = round(ls.Width, 3)
+        return d
+    for interfaz, clase in ((D.IHashLineSymbol, "HashLine"),
+                            (D.IMarkerLineSymbol, "MarkerLine")):
+        if _qi(sym, interfaz) is not None:
+            return {"tipo": "no-soportado", "clase": clase}
+    cl = _qi(sym, D.ICartographicLineSymbol)
+    if cl is not None:
+        d = {"tipo": "CartographicLine", "color": _dump_color(cl.Color),
+             "ancho_pt": round(cl.Width, 3), "cap": int(cl.Cap),
+             "join": int(cl.Join)}
+        d.update(_patron_linea(sym))
+        return d
+    return {"tipo": "no-soportado", "clase": type(sym).__name__}
 
 
 def _dump_marcador(ms):
@@ -163,8 +211,9 @@ def _dump_simbolo(sym):
     if ms is not None:
         return _dump_marcador(ms)
 
-    ls = _qi(sym, D.ISimpleLineSymbol)
-    if ls is not None:
+    # Cualquier linea (simple, cartografica, multicapa...): _dump_linea sabe
+    # cuales reconoce y marca el resto como no-soportado.
+    if _qi(sym, D.ILineSymbol) is not None:
         return _dump_linea(sym)
 
     return {"tipo": "no-soportado", "clase": type(sym).__name__}

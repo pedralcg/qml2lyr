@@ -78,8 +78,8 @@ class SettingsDialog(QDialog):
                               u"de QGIS", u""),
                              (u"Juntarlas dentro de cada grupo (el árbol no "
                               u"cambia)", u"grupo"),
-                             (u"Juntarlas en todo el proyecto (salen de sus "
-                              u"grupos)", u"proyecto")):
+                             (u"Juntarlas en todo el proyecto (van al sitio "
+                              u"de la primera encendida)", u"proyecto")):
             self.cb_agrupar.addItem(texto, valor)
         actual = s.value("qml2lyr/agrupar_wms", "") or ""
         self.cb_agrupar.setCurrentIndex(max(0, self.cb_agrupar.findData(actual)))

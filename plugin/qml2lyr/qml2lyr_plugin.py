@@ -21,6 +21,7 @@ que corre en una QgsTask y QGIS no se congela.
 import os
 import re
 import tempfile
+import unicodedata
 
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtCore import QSettings
@@ -372,7 +373,11 @@ class Qml2LyrPlugin(object):
 
     @staticmethod
     def _nombre_fichero(nombre):
-        limpio = re.sub(r"[^0-9A-Za-z._-]+", "_", nombre or "capa").strip("_")
+        # Mismo saneado que emisor._nombre_fichero (otro runtime): las tildes
+        # se transliteran antes ("Vias", no "V_as").
+        plano = "".join(c for c in unicodedata.normalize("NFKD", nombre or "capa")
+                        if not unicodedata.combining(c))
+        limpio = re.sub(r"[^0-9A-Za-z._-]+", "_", plano).strip("_")
         return limpio or "capa"
 
 

@@ -843,6 +843,112 @@ def _pixeles_de_color(ruta_lyr, rgb, png, tolerancia=40):
     return int(cerca.sum())
 
 
+def caso_alfa_cero(fallos):
+    """(v0.5.0) Un color con alfa 0 es INVISIBLE en QGIS; hasta la v0.4.0
+    salia opaco en el .lyr y sin aviso. Contorno y linea -> estilo "no";
+    relleno de marcador -> color nulo (solo se ve el borde)."""
+    casos = ((u"alfa0_contorno", SHP_POLIGONOS),
+             (u"alfa0_linea", SHP_LINEAS),
+             (u"alfa0_marcador_relleno", SHP_PUNTOS))
+    simbolos = {}
+    for nombre, dato in casos:
+        lyr = _salida(nombre + u".lyr")
+        rc, out, err = _lanzar([os.path.join(DIR_QML, nombre + u".qml"),
+                                dato, lyr])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"%s no convirtio: %r / %s" % (nombre, capa, err[:300]))
+            continue
+        simbolos[nombre] = (lyr_dump.dump_lyr(lyr).get("renderer") or {}) \
+            .get("simbolo") or {}
+    if u"alfa0_contorno" in simbolos:
+        _igual(fallos, (simbolos[u"alfa0_contorno"].get("contorno") or {})
+               .get("estilo"), u"no", u"contorno de alfa 0")
+    if u"alfa0_linea" in simbolos:
+        _igual(fallos, simbolos[u"alfa0_linea"].get("estilo"), u"no",
+               u"linea de alfa 0")
+    if u"alfa0_marcador_relleno" in simbolos:
+        m = simbolos[u"alfa0_marcador_relleno"]
+        _igual(fallos, ((m.get("color") or {}).get("nulo"), m.get("contorno")),
+               (True, True), u"marcador: relleno nulo y con borde")
+
+
+def caso_else_dos_campos(fallos):
+    """(v0.5.0) ELSE con dos reglas sobre campos distintos, sobre la GDB con
+    nulos. Que entidades dibuja cada .lyr en ArcMap (su def-query aplicada):
+    tiene que ser lo de QGIS, leido con legendKeysForFeature y comprobado por
+    render (ver el generador del fixture). Con el ELSE de la v0.4.0 las
+    entidades 3 y 4 salian en su regla Y en el ELSE: ArcMap las pintaba dos
+    veces."""
+    import arcpy
+    base = _salida(u"else_dos_campos.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"reglas_else_dos_campos.qml"),
+                            FC_NULOS, base])
+    datos = _json_estricto(out, fallos) or {}
+    capas = datos.get("capas") or []
+    if not capas or not all(c.get("ok") for c in capas):
+        fallos.append(u"no convirtio: %r / %s" % (datos, err[:300]))
+        return
+    por_regla = {}
+    for c in capas:
+        capa = arcpy.mapping.Layer(c["salida"])
+        por_regla[c["nombre"]] = sorted(
+            f[0] for f in arcpy.da.SearchCursor(capa, ["OID@"]))
+        del capa
+    _igual(fallos, por_regla, {u"G uno": [1, 2, 3], u"Rural": [4],
+                               u"Resto": [5, 6]},
+           u"entidades que dibuja cada .lyr (QGIS: 1-3, 4, 5-6)")
+
+
+def caso_multicapa_linea_marcador(fallos):
+    """(v0.5.0) Linea de dos SimpleLine (casing) -> MultiLayerLineSymbol y
+    marcador de dos SimpleMarker -> MultiLayerMarkerSymbol, con la ULTIMA
+    capa de QGIS encima (en ArcObjects, la 0). Lo prueba un render: si la
+    ancha oscura quedara encima, la fina amarilla no se veria."""
+    def color(rgb):
+        return {"rgb": list(rgb), "transparencia": 255, "nulo": False}
+    lyr = _salida(u"linea_multicapa.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"linea_multicapa.qml"),
+                            SHP_LINEAS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"linea_multicapa no convirtio: %r / %s" % (capa, err[:300]))
+    else:
+        simbolo = (lyr_dump.dump_lyr(lyr).get("renderer") or {}).get("simbolo")
+        _igual(fallos, simbolo, {"tipo": "MultiLayerLine", "capas": [
+            {"tipo": "SimpleLine", "estilo": "solid",
+             "color": color((255, 215, 0)), "ancho_pt": 2.835},
+            {"tipo": "SimpleLine", "estilo": "solid",
+             "color": color((32, 32, 32)), "ancho_pt": 5.669}]},
+            u"linea multicapa (la 0 es la de arriba)")
+        amarillo = _pixeles_de_color(lyr, (255, 215, 0),
+                                     _salida(u"linea_multicapa.png"), 30)
+        oscuro = _pixeles_de_color(lyr, (32, 32, 32),
+                                   _salida(u"linea_multicapa_2.png"), 30)
+        if not (amarillo > 0 and oscuro > 0):
+            fallos.append(u"el casing no se dibuja con la fina encima: %d px "
+                          u"amarillos, %d oscuros" % (amarillo, oscuro))
+
+    lyr = _salida(u"marcador_multicapa.lyr")
+    rc, out, err = _lanzar([os.path.join(DIR_QML, u"marcador_multicapa.qml"),
+                            SHP_PUNTOS, lyr])
+    capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+    if not capa.get("ok"):
+        fallos.append(u"marcador_multicapa no convirtio: %r / %s"
+                      % (capa, err[:300]))
+        return
+    simbolo = (lyr_dump.dump_lyr(lyr).get("renderer") or {}).get("simbolo") or {}
+    _igual(fallos, [(c.get("tipo"), c.get("estilo"), (c.get("color") or {})
+                     .get("rgb")) for c in simbolo.get("capas", [])],
+           [("SimpleMarker", "cuadrado", [255, 255, 255]),
+            ("SimpleMarker", "circulo", [228, 26, 28])],
+           u"marcador multicapa (el cuadrado blanco arriba)")
+    # El fondo del render tambien es blanco: aqui el orden lo prueba el
+    # volcado, y el render solo que el multicapa se dibuja.
+    if not _pixeles_de_color(lyr, (228, 26, 28), _salida(u"m_multi.png"), 30):
+        fallos.append(u"el marcador multicapa no se dibuja")
+
+
 def caso_etiquetas(fallos):
     """(17) Etiquetas simples -> LabelEngineLayerProperties estandar: campo o
     concatenacion, fuente, tamano, color, halo y escalas. Se comprueba el
@@ -927,6 +1033,130 @@ COLORES_QGIS_RGB = {
 }
 
 
+def caso_etiquetas_degradan(fallos):
+    """(v0.5.0) Un fallo de ArcObjects al etiquetar deja la capa SIN etiquetas
+    y con aviso; hasta la v0.4.0 la tumbaba entera (ok=False) aunque la
+    simbologia estuviera bien. El fallo se fuerza en proceso: no hay un estilo
+    de QGIS que haga fallar a ArcObjects de forma reproducible."""
+    import emisor
+    from _ctypes import COMError
+    lyr = _salida(u"etiquetas_degradan.lyr")
+
+    def _revienta(capa_geo, etiquetado):
+        raise COMError(-2147467259, u"Error no especificado", (None,) * 5)
+    original = emisor._etiquetar
+    emisor._etiquetar = _revienta
+    try:
+        r = emisor.emitir_qml(os.path.join(DIR_QML, u"etiquetas_simples.qml"),
+                              SHP_POLIGONOS, lyr)
+    finally:
+        emisor._etiquetar = original
+    capa = (r.get("capas") or [{}])[0]
+    _igual(fallos, capa.get("ok"), True, u"la capa sale aunque fallen las etiquetas")
+    if not any(u"etiquetas no emitidas" in a for a in capa.get("avisos", [])):
+        fallos.append(u"falta el aviso de etiquetas no emitidas: %r"
+                      % capa.get("avisos"))
+    if os.path.exists(lyr):
+        volcado = lyr_dump.dump_lyr(lyr)
+        _igual(fallos, volcado.get("etiquetas"), None, u"etiquetas en el .lyr")
+        if not (volcado.get("renderer") or {}).get("simbolo"):
+            fallos.append(u"el .lyr no lleva la simbologia: %r" % volcado)
+    else:
+        fallos.append(u"no se escribio el .lyr")
+
+
+def _lyr_con_simbolo(base, salida, poner):
+    """Abre `base`, cambia el simbolo de su SimpleRenderer con
+    `poner(simbolo_actual) -> simbolo nuevo` y guarda como `salida`."""
+    import emisor
+    D, CA = emisor._mods()
+    lf = emisor._nobj(CA.LayerFile, CA.ILayerFile)
+    lf.Open(base)
+    capa = lf.Layer
+    rend = emisor._qi_exig(emisor._qi_exig(capa, CA.IGeoFeatureLayer).Renderer,
+                           CA.ISimpleRenderer)
+    rend.Symbol = emisor._qi_exig(poner(rend.Symbol), D.ISymbol)
+    if os.path.exists(salida):
+        os.remove(salida)
+    nuevo = emisor._nobj(CA.LayerFile, CA.ILayerFile)
+    nuevo.New(salida)
+    nuevo.ReplaceContents(capa)
+    nuevo.Save()
+    nuevo.Close()
+    lf.Close()
+
+
+def caso_lyr_dump_lineas(fallos):
+    """(v0.5.0) lyr_dump vuelca CartographicLine (con y sin patron) y
+    MultiLayerLine, tambien como CONTORNO de un relleno, y marca no-soportado
+    lo que no reconoce. Hasta la v0.4.0 un contorno asi salia como
+    {"tipo": "POINTER(ILineSymbol)"}: dos contornos distintos se volcaban
+    igual y la regresion los daba por buenos. Los simbolos se construyen con
+    ArcObjects: son los de las Bases Cartograficas de ArcMap, que QGIS no
+    escribe."""
+    import emisor
+    emisor._init_arcobjects()
+    D, CA = emisor._mods()
+    base = _salida(u"lineas_base_poligono.lyr")
+    r = emisor.emitir_qml(os.path.join(DIR_QML, u"poligono_simple.qml"),
+                          SHP_POLIGONOS, base)
+    if not (r.get("capas") or [{}])[0].get("ok"):
+        fallos.append(u"no se pudo emitir la base: %r" % r)
+        return
+
+    def cartografica(rgb, ancho, patron=None):
+        cl = emisor._nobj(D.CartographicLineSymbol, D.ICartographicLineSymbol)
+        cl.Color = emisor._color(rgb)
+        cl.Width = ancho
+        if patron:
+            plantilla = emisor._nobj(D.Template, D.ITemplate)
+            plantilla.Interval = 2.0
+            for marca, hueco in patron:
+                plantilla.AddPatternElement(marca, hueco)
+            emisor._qi_exig(cl, D.ILineProperties).Template = plantilla
+        return cl
+
+    def contorno_multicapa(simbolo):
+        ml = emisor._nobj(D.MultiLayerLineSymbol, D.IMultiLayerLineSymbol)
+        simple = emisor._nobj(D.SimpleLineSymbol, D.ISimpleLineSymbol)
+        simple.Color = emisor._color((0, 0, 0))
+        simple.Width = 3.0
+        # AddLayer inserta en el indice 0: la ultima anyadida queda ARRIBA.
+        ml.AddLayer(emisor._qi_exig(simple, D.ILineSymbol))
+        ml.AddLayer(emisor._qi_exig(cartografica((200, 200, 200), 2.0),
+                                    D.ILineSymbol))
+        ml.AddLayer(emisor._qi_exig(cartografica((10, 20, 30), 1.0,
+                                                 [(3.0, 1.0)]), D.ILineSymbol))
+        emisor._qi_exig(simbolo, D.IFillSymbol).Outline = \
+            emisor._qi_exig(ml, D.ILineSymbol)
+        return simbolo
+
+    lyr = _salida(u"contorno_cartografico.lyr")
+    _lyr_con_simbolo(base, lyr, contorno_multicapa)
+    simbolo = (lyr_dump.dump_lyr(lyr).get("renderer") or {}).get("simbolo") or {}
+
+    def color(rgb):
+        return {"rgb": list(rgb), "transparencia": 255, "nulo": False}
+    _igual(fallos, simbolo.get("contorno"), {
+        "tipo": "MultiLayerLine", "capas": [
+            {"tipo": "CartographicLine", "color": color((10, 20, 30)),
+             "ancho_pt": 1.0, "cap": 0, "join": 0,
+             "patron": [[3.0, 1.0]], "intervalo": 2.0},
+            {"tipo": "CartographicLine", "color": color((200, 200, 200)),
+             "ancho_pt": 2.0, "cap": 0, "join": 0},
+            {"tipo": "SimpleLine", "estilo": "solid",
+             "color": color((0, 0, 0)), "ancho_pt": 3.0}]},
+        u"contorno multicapa con lineas cartograficas")
+
+    def hash_line(simbolo):
+        return emisor._nobj(D.HashLineSymbol, D.ILineSymbol)
+    lyr = _salida(u"hash_line.lyr")
+    _lyr_con_simbolo(base, lyr, hash_line)
+    simbolo = (lyr_dump.dump_lyr(lyr).get("renderer") or {}).get("simbolo")
+    _igual(fallos, simbolo, {"tipo": "no-soportado", "clase": "HashLine"},
+           u"HashLine se identifica como no-soportado")
+
+
 def _colores_celdas_arcmap(ruta_lyr, png):
     """Color que ArcMap pinta en el centro de cada celda de rgb.tif, situado
     con el world file del PNG (ArcMap ajusta la extension al marco)."""
@@ -1003,6 +1233,52 @@ def caso_raster_rgb(fallos):
     _igual(fallos, capa.get("ok"), True, u"16 bits sin realce sale")
     if not any(u"mas oscuros" in a for a in capa.get("avisos") or []):
         fallos.append(u"16 bits sin realce sin aviso: %r" % capa.get("avisos"))
+
+
+#: Gris que QGIS 3.44.12 pinta en el centro de cada celda (render, impreso por
+#: el generador `qml_raster_gris`). ArcMap tiene que dar lo mismo (+-3).
+GRISES_QGIS = {
+    u"raster_gris": [[0, 61, 137], [225, 32, 184], [96, 4, 255]],
+    u"raster_gris_inverso": [[255, 194, 118], [30, 223, 71], [159, 251, 0]],
+    u"raster_gris_8bits_sin_realce": [[0, 128, 255], [64, 192, 32],
+                                      [255, 0, 128]],
+}
+
+
+def caso_raster_gris(fallos):
+    """(v0.5.0) singlebandgray, el renderer por defecto de un raster
+    monobanda en QGIS -> estirado negro-blanco de ArcMap. El gris de cada
+    celda tiene que ser el de QGIS. El flotante va sobre una COPIA de
+    cortes.tif: el emisor le calcula estadisticas y el caso de los cortes
+    necesita el original sin ellas."""
+    import arcpy
+    gris = os.path.join(DIR_DATOS, u"gris.tif")
+    if not arcpy.Exists(gris):
+        arcpy.CopyRaster_management(RASTER_CORTES, gris)
+    for nombre, raster in ((u"raster_gris", gris),
+                           (u"raster_gris_inverso", gris),
+                           (u"raster_gris_8bits_sin_realce", RASTER_RGB)):
+        lyr = _salida(nombre + u".lyr")
+        rc, out, err = _lanzar([os.path.join(DIR_QML, nombre + u".qml"),
+                                raster, lyr])
+        capa = (((_json_estricto(out, fallos) or {}).get("capas")) or [{}])[0]
+        if not capa.get("ok"):
+            fallos.append(u"%s no convirtio: %r / %s" % (nombre, capa, err[:300]))
+            continue
+        if any(u"rango" in a for a in capa.get("avisos") or []):
+            fallos.append(u"%s avisa de un rango distinto: %r"
+                          % (nombre, capa.get("avisos")))
+        obtenidos = _colores_celdas_arcmap(lyr, _salida(nombre + u".png"))
+        for fila in range(3):
+            for col in range(3):
+                q = GRISES_QGIS[nombre][fila][col]
+                am = obtenidos[fila][col]
+                # +-4: ArcMap muestrea la rampa con ese error (medido con 16,
+                # 32 y 128 subtramos: cambia de sitio, no baja). Con la rampa
+                # LabLCh de antes de la v0.5.0 el error llegaba a 29.
+                if max(abs(q - v) for v in am) > 4:
+                    fallos.append(u"%s celda (%d,%d): QGIS %d, ArcMap %r"
+                                  % (nombre, fila, col, q, am))
 
 
 def caso_categoria_resto_nula(fallos):
@@ -1360,6 +1636,26 @@ def caso_modo_mxd(fallos):
         fallos.append(u"'Paleta' deberia estar encendida dentro de 'Sub B'")
     del doc
 
+    # (v0.5.0) Un .lyr por nodo de primer nivel, para llevar los grupos a un
+    # ArcMap abierto con add_layer: el grupo entero, con su arbol y sus
+    # visibilidades, y sin fuentes rotas desde la carpeta de los .lyr.
+    primer_nivel = datos.get("lyr_primer_nivel") or []
+    _igual(fallos, [os.path.basename(r) for r in primer_nivel],
+           [u"01_Zonas_por_tipo.lyr", u"02_Grupo_A.lyr", u"03_RGB.lyr"],
+           u".lyr de primer nivel")
+    if len(primer_nivel) == 3:
+        grupo = arcpy.mapping.Layer(primer_nivel[1])
+        _igual(fallos, grupo.isGroupLayer, True, u"02_Grupo_A es un grupo")
+        _igual(fallos, [(u"x " if c.visible else u"- ") + c.longName
+                        for c in arcpy.mapping.ListLayers(grupo)], [
+            u"x Grupo A", u"- Grupo A\\Solo rios", u"- Grupo A\\Sub B",
+            u"x Grupo A\\Sub B\\Paleta"], u"arbol dentro del .lyr de grupo")
+        rotas = [c.longName for ruta in primer_nivel
+                 for c in arcpy.mapping.ListLayers(arcpy.mapping.Layer(ruta))
+                 if not c.isGroupLayer and c.isBroken]
+        _igual(fallos, rotas, [], u"fuentes rotas en los .lyr de primer nivel")
+        del grupo
+
     rc, out, err = _lanzar([u"--mxd", QGZ_MXD, mxd])
     datos = _json_estricto(out, fallos) or {}
     _igual(fallos, (rc, datos.get("tipo_error")), (2, u"SalidaExiste"),
@@ -1382,6 +1678,45 @@ ARBOL_MXD_WMS = {
     u"proyecto": [u"x Ortofotos", u"x Ortofotos\\Parcelas (+5 del mismo WMS)",
                   u"x Ortofotos\\Zonas", u"x Base", u"x Base\\Parcelas al 50"],
 }
+
+
+QGZ_MXD_WMS_HOMONIMOS = os.path.join(RAIZ, "tests", "fixtures",
+                                     "mxd_wms_homonimos.qgz")
+QGZ_MXD_WMS_APAGADO = os.path.join(RAIZ, "tests", "fixtures",
+                                   "mxd_wms_apagado.qgz")
+
+
+def caso_mxd_agrupar_wms_casos(fallos):
+    """(v0.5.0) Los dos fallos de --agrupar-wms de la revision del PR #8:
+    dos grupos hermanos homonimos se juntaban en uno ("grupo" cambiaba el
+    arbol), y en "proyecto" la capa agrupada caia en un grupo APAGADO aunque
+    otro miembro se viera. Arboles esperados en la doc del fixture."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tests"))
+    import wms_local
+    carpeta = os.path.join(DIR_OUT, u"mxd_wms_casos")
+    if os.path.isdir(carpeta):
+        shutil.rmtree(carpeta)
+    servidor = wms_local.arrancar()
+    try:
+        for qgz, modo, arbol in (
+                (QGZ_MXD_WMS_HOMONIMOS, u"grupo",
+                 [u"x Ortos", u"x Ortos\\Parcelas A (+1 del mismo WMS)",
+                  u"x Ortos", u"x Ortos\\Parcelas B (+1 del mismo WMS)"]),
+                (QGZ_MXD_WMS_APAGADO, u"proyecto",
+                 [u"x Ortos", u"x Ortos\\Parcelas (+1 del mismo WMS)"])):
+            mxd = os.path.join(carpeta, os.path.basename(qgz)[:-4] + u".mxd")
+            rc, out, err = _lanzar([u"--mxd", qgz, mxd, u"--agrupar-wms", modo])
+            datos = _json_estricto(out, fallos) or {}
+            if not datos.get("ok"):
+                fallos.append(u"%s: el MXD fallo: %r / %s" % (
+                    modo, datos.get("error"),
+                    err.decode("utf-8", "replace")[:300]))
+                continue
+            _igual(fallos, datos["verificacion"]["arbol"], arbol,
+                   u"arbol de %s" % os.path.basename(qgz))
+    finally:
+        servidor.shutdown()
 
 
 def caso_mxd_agrupar_wms(fallos):
@@ -1595,7 +1930,13 @@ CASOS = [
     ("regla_desmarcada_simbolo_raro", caso_regla_desmarcada_simbolo_raro),
     ("raster_cortes_aux_gdal", caso_raster_cortes_aux_gdal),
     ("etiquetas", caso_etiquetas),
+    ("etiquetas_degradan", caso_etiquetas_degradan),
+    ("lyr_dump_lineas", caso_lyr_dump_lineas),
+    ("else_dos_campos", caso_else_dos_campos),
+    ("alfa_cero", caso_alfa_cero),
+    ("multicapa_linea_marcador", caso_multicapa_linea_marcador),
     ("raster_rgb", caso_raster_rgb),
+    ("raster_gris", caso_raster_gris),
     ("categoria_resto_nula", caso_categoria_resto_nula),
     ("categorizado_multicampo", caso_categorizado_multicampo),
     ("batch_sintetico", caso_batch_sintetico),
@@ -1604,6 +1945,7 @@ CASOS = [
     ("xyz_que_es_wmts", caso_xyz_que_es_wmts),
     ("modo_mxd", caso_modo_mxd),
     ("mxd_agrupar_wms", caso_mxd_agrupar_wms),
+    ("mxd_agrupar_wms_casos", caso_mxd_agrupar_wms_casos),
     ("args_json_plugin", caso_args_json_plugin),
     ("parser_sin_arcobjects", caso_parser_sin_arcobjects),
 ]
