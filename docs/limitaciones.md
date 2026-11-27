@@ -69,9 +69,14 @@ El `.lyr` necesita un dato que arcpy pueda abrir por ruta:
   **WMTS en forma KVP** (`…?SERVICE=WMTS&REQUEST=GetTile&LAYER=…&TILEMATRIXSET=…`,
   como se suele cargar el PNOA del IGN) se emite como **capa WMTS** contra la
   URL base, con la capa, la matriz, el estilo y el formato de la URL, y se avisa.
-  Con el PNOA del IGN, el WMTS **conecta** en ArcMap 10.5; que se vea la imagen
-  falta comprobarlo a mano (un export standalone de arcpy no dibuja ningún
-  WMTS, tampoco el de la v0.2.0). La forma **REST**
+  **El PNOA (`pnoa-ma`) del IGN conecta en ArcMap 10.5 pero NO se dibuja**
+  (medido el 2026-11-27 en un ArcMap abierto, con un proxy entre ArcMap y el
+  IGN: pide y recibe las teselas correctas y la vista sale en blanco). No es la
+  conversión: con el mismo código, `mapa-raster` e `ign-base` del IGN y el
+  World Imagery de Esri sí se dibujan. Desde la v0.5.1 se avisa y se propone la
+  alternativa, el **WMS** del PNOA (`https://www.ign.es/wms-inspire/pnoa-ma`).
+  Para comprobar un WMTS no vale un export de arcpy, que no dibuja ninguno: hay
+  que mirarlo en un ArcMap abierto. La forma **REST**
   (`…/wmts/1.0.0/capa/estilo/matriz/{z}/{y}/{x}.jpg`) no dice dónde está el
   `GetCapabilities`: se rechaza con la pista de cargarla en QGIS como WMTS.
   Caso que lo motivó y que **no** se arregla así: las dos capas de Sentinel-2

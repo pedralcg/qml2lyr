@@ -608,6 +608,26 @@ def test_raster_gris(fallos):
     _igual(fallos, (r.minimo, r.maximo), (0.0, 255.0), u"sin realce: 0-255")
 
 
+def test_xyz_pnoa_ign(fallos):
+    """QGIS 3.44.12: el PNOA del IGN como XYZ sale como WMTS de pnoa-ma con
+    el aviso de que ArcMap 10.5 no lo dibuja y la alternativa WMS. Por la
+    via del plugin (sin nombre) el aviso dice «la capa», no «'None'»."""
+    ruta = os.path.join(RAIZ, "tests", "fixtures", "xyz_pnoa_ign.qgz")
+    ml = list(parser_qgis._raiz_qgs(ruta).iter("maplayer"))[0]
+    capa = parser_qgis.parse_maplayer(ml)[0]
+    _igual(fallos, (capa.servicio.url, capa.servicio.capa),
+           (u"https://www.ign.es/wmts/pnoa-ma", u"OI.OrthoimageCoverage"),
+           u"WMTS del PNOA")
+    if not any(u"NO se dibuja" in a and u"wms-inspire/pnoa-ma" in a
+               for a in capa.avisos):
+        fallos.append(u"sin el aviso del PNOA: %r" % capa.avisos)
+    avisos = []
+    parser_qgis.servicio_desde_datasource(ml.findtext("datasource"), None,
+                                          avisos)
+    if not avisos or not avisos[0].startswith(u"la capa es una capa XYZ"):
+        fallos.append(u"aviso sin nombre: %r" % avisos[:1])
+
+
 def test_multicapa_linea_marcador(fallos):
     """QGIS 3.44.12: linea de dos SimpleLine y marcador de dos SimpleMarker,
     en el orden de dibujo de QGIS (la primera, abajo). Hasta la v0.4.0 se

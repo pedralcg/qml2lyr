@@ -992,7 +992,11 @@ def caso_etiquetas(fallos):
                               _salida(u"etiquetas_render.png"))
     halo = _pixeles_de_color(sin_escalas, (255, 255, 0),
                              _salida(u"etiquetas_render_halo.png"))
-    if texto < 50 or halo < 50:
+    # Umbral de PRESENCIA, no de tamaño: sin etiquetas sale 0. El núcleo del
+    # color exacto de dos letras de 10 pt ronda los 40-60 px y varía entre
+    # pasadas (43 el 2026-11-27, con el render correcto a la vista): con 50
+    # el caso iba al filo y fallaba sin que hubiera regresión.
+    if texto < 20 or halo < 20:
         fallos.append(u"las etiquetas no se pintan: %d px de texto, %d de halo"
                       % (texto, halo))
 

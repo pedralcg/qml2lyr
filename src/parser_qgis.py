@@ -2133,11 +2133,39 @@ def _wmts_desde_gettile(url):
                         formato=params.get(u"format") or None)
 
 
+#: WMTS que ArcMap 10.5 conecta y de los que pide las teselas correctas, pero
+#: que NO dibuja. Medido el 2026-11-27 con un proxy entre ArcMap y el IGN:
+#: piden y reciben (200, image/jpeg) las teselas justas y la ventana sale en
+#: blanco. Con el mismo emisor, el World Imagery de Esri y `mapa-raster` e
+#: `ign-base` del IGN si pintan. Descartados: CRS en forma URN, notacion
+#: cientifica del GetCapabilities y el JPEG. La causa no esta aislada.
+#: -> (prefijo de URL, alternativa que si pinta)
+_WMTS_QUE_ARCMAP_NO_PINTA = (
+    (u"https://www.ign.es/wmts/pnoa-ma",
+     u"el WMS https://www.ign.es/wms-inspire/pnoa-ma (capa "
+     u"OI.OrthoimageCoverage)"),
+)
+
+
+def _avisar_wmts_que_no_pinta(wmts, avisos):
+    for prefijo, alternativa in _WMTS_QUE_ARCMAP_NO_PINTA:
+        if (wmts.url or u"").rstrip(u"/?").lower() == prefijo:
+            avisos.append(
+                u"el WMTS %s conecta en ArcMap 10.5 pero NO se dibuja (medido: "
+                u"ArcMap pide y recibe las teselas y la vista sale en blanco). "
+                u"Para verlo en ArcMap, cargalo en QGIS como %s y vuelve a "
+                u"convertir" % (wmts.url, alternativa))
+
+
 def servicio_desde_datasource(datasource, nombre, avisos):
     """Origen de datos del proveedor `wms` de QGIS (el `<datasource>` del
     .qgs o el `layer.source()` de la capa viva) -> ServicioWMS o ServicioWMTS
     (el mismo proveedor sirve los dos); SimbologiaNoSoportada si es un XYZ
-    (salvo que su URL sea un GetTile de WMTS, ver `_wmts_desde_gettile`)."""
+    (salvo que su URL sea un GetTile de WMTS, ver `_wmts_desde_gettile`).
+
+    `nombre` falta en la via del plugin (el .qml no lo trae y el emisor lo
+    pone despues): los mensajes dicen entonces «la capa», no «'None'»."""
+    nombre = u"'%s'" % nombre if nombre else u"la capa"
     pares = _parametros_uri(datasource)
     params = dict(pares)
     url = params.get(u"url")
@@ -2145,35 +2173,38 @@ def servicio_desde_datasource(datasource, nombre, avisos):
         wmts = _wmts_desde_gettile(url)
         if wmts is not None:
             avisos.append(
-                u"'%s' es una capa XYZ de QGIS, pero su URL es un GetTile de "
+                u"%s es una capa XYZ de QGIS, pero su URL es un GetTile de "
                 u"WMTS: se emite como capa WMTS (capa %s, matriz %s) contra "
                 u"el GetCapabilities de %s" % (nombre, wmts.capa, wmts.matriz,
                                                 wmts.url))
+            _avisar_wmts_que_no_pinta(wmts, avisos)
             return wmts
         pista = u""
         if u"wmts" in (url or u"").lower():
             pista = (u". Su URL parece un WMTS en forma REST, de la que no se "
                      u"deduce el GetCapabilities: anadela en QGIS como WMTS")
         raise SimbologiaNoSoportada(
-            u"'%s' es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
+            u"%s es una capa de teselas XYZ (%s): ArcMap 10.5 no tiene un "
             u"tipo de capa para ellas%s" % (nombre, url, pista))
     if not url:
-        raise SimbologiaNoSoportada(u"capa WMS '%s' sin url= en el origen de "
+        raise SimbologiaNoSoportada(u"capa WMS %s sin url= en el origen de "
                                     u"datos" % nombre)
     capas = [v for k, v in pares if k == u"layers" and v]
     if not capas:
-        raise SimbologiaNoSoportada(u"capa WMS '%s' sin layers=: no se sabe "
+        raise SimbologiaNoSoportada(u"capa WMS %s sin layers=: no se sabe "
                                     u"que subcapas encender" % nombre)
     if params.get(u"tileMatrixSet"):
         # WMTS: una capa y una matriz de teselas (QGIS no pide mas de una).
         if len(capas) > 1:
             raise SimbologiaNoSoportada(
-                u"WMTS '%s' con varias capas (%s): un WMTS sirve una"
+                u"WMTS %s con varias capas (%s): un WMTS sirve una"
                 % (nombre, u", ".join(capas)))
-        return ServicioWMTS(url=url, capa=capas[0],
+        wmts = ServicioWMTS(url=url, capa=capas[0],
                             matriz=params[u"tileMatrixSet"],
                             estilo=params.get(u"styles") or None,
                             formato=params.get(u"format"))
+        _avisar_wmts_que_no_pinta(wmts, avisos)
+        return wmts
     estilos = [v for k, v in pares if k == u"styles"]
     if any(estilos):
         avisos.append(u"estilos WMS (%s) no trasladados: ArcMap pide cada "

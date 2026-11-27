@@ -352,6 +352,14 @@ es un WMTS contra la URL base.
   `TileMatrixSet`, `Style` e `ImageFormat` se fijan en la capa **después** de
   `Connect` y se leen de vuelta. El WMTS local de los tests pone la 4326 primero
   para cazarlo.
+  **Que pinte solo se ve en un ArcMap ABIERTO**: ni `ExportToPNG` de arcpy ni
+  las capturas por export del add-in dibujan un WMTS. Lo que sirve es capturar
+  la ventana (`PrintWindow`). Medido así el 2026-11-27: `pnoa-ma` del IGN
+  **no se dibuja** (ArcMap pide y recibe las teselas justas, comprobado con un
+  proxy), mientras que `mapa-raster`, `ign-base` y el World Imagery de Esri sí.
+  La causa no está aislada (descartados el CRS URN, la notación científica del
+  GetCapabilities y el JPEG). `_WMTS_QUE_ARCMAP_NO_PINTA` del parser avisa y da
+  la alternativa WMS.
 - **Etiquetas**: `LabelEngineLayerProperties` **estándar**, nunca las de Maplex:
   medido (2026-09-25, render) que un `.lyr` estándar se pinta igual en un mapa
   estándar y en uno Maplex, y uno Maplex **no** se pinta en uno estándar. El
